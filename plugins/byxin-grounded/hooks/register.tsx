@@ -27,6 +27,14 @@ type Live = { session: string; host: string; branch?: string; at: string; files:
 type Where = { tree: string; tree_why: string; hub: string; record: string; vendored: boolean; runtime: string; shared: unknown; host: string; branch: string }
 
 const QUESTION = /\?\s*$|^\s*(what|why|how|where|when|who|which|is|are|does|do|did|can|could|explain|describe|tell me)\b/i
+// NO ONE ASKED. Measured 2026-10-04: a session watching a long-running job recorded every monitor event as "asked:
+// <task-notification>", and the block every other session read was a wall of status lines (lesson
+// a-status-line-is-not-someone-asking). The engine says where a prompt came from; these origins are not a person, and a
+// prompt in one of these envelopes is not either. brain/bridge.py keeps the same envelopes for older records.
+const NOT_A_PERSON = new Set(['task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay',
+  'coordinator', 'observer', 'observer-activity', 'plugin'])
+const ENVELOPES = ['task-notification', 'system-reminder', 'ci-monitor-event', 'local-command-caveat', 'local-command-stdout', 'command-name', 'bash-input', 'bash-stdout', 'bash-stderr']
+const ENVELOPE = new RegExp(`^\\s*<(${ENVELOPES.join('|')})[\\s>]`)
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 // python3 first (Linux, macOS, a cloud box); python and the launcher where Windows has no python3
 const PYTHONS: string[][] = [['python3'], ['python'], ['py', '-3']]
@@ -58,6 +66,8 @@ let asked = 0
 let unverified = 0
 // the shared brain
 let turnAsk = ''
+let turnTrigger = ''   // where this turn's prompt came from (the engine's origin, or the envelope it came in)
+let turnByPerson = true
 let turnEdits: string[] = []
 const sessionEdits = new Set<string>()
 let live: Live[] = []
@@ -168,7 +178,11 @@ export const register: Register = on => {
     reads = []
     seen = []
     pending = null
-    turnAsk = e.text.startsWith('/') ? '' : e.text
+    const envelope = ENVELOPE.exec(e.text)
+    const origin = e.origin?.kind ?? 'unclassified'
+    turnTrigger = envelope !== null ? envelope[1] : origin
+    turnByPerson = envelope === null && !NOT_A_PERSON.has(origin)
+    turnAsk = !turnByPerson || e.text.startsWith('/') ? '' : e.text
     turnEdits = []
     if (mode === 'off') return next(e)
     if (ready !== null) await ready
@@ -181,7 +195,8 @@ export const register: Register = on => {
     extra.push(...alerts.splice(0))
     const ev = extra.length ? { ...e, context: [...(e.context ?? []), ...extra] } : e
 
-    const isOn = mode === 'always' || (QUESTION.test(e.text) && !e.text.startsWith('/'))
+    // a notification is not a question to ground: no retrieval, no engine call, no comparator for it
+    const isOn = turnByPerson && (mode === 'always' || (QUESTION.test(e.text) && !e.text.startsWith('/')))
     if (!isOn) return next(ev)
     if (PY === null) {
       return next({ ...ev, context: [...(ev.context ?? []), 'ByxIn could not consult the record: no Python 3 on this machine. Say so if the answer depends on the record.'] })
@@ -264,13 +279,17 @@ export const register: Register = on => {
       }
     }
     pending = null
-    if (turnAsk !== '' && PY !== null && where !== null) {
+    // a turn no one asked enters the record only for what it edited, and says what started it
+    const keep = turnByPerson ? turnAsk !== '' : turnEdits.length > 0
+    if (keep && PY !== null && where !== null) {
       // local first and awaited, so a session that exits right after its turn still leaves the turn behind; the
       // network sync runs beside it, and any later sync of any session carries the event if this one is cut short
-      await run($, 'turn', { ask: turnAsk, answer: e.answer.slice(0, 600), files: [...turnEdits], outcome, participation, sync: false }, 60000)
+      await run($, 'turn', { ask: turnAsk, answer: e.answer.slice(0, 600), files: [...turnEdits], outcome, participation, trigger: turnTrigger, sync: false }, 60000)
       if (where.shared) void run($, 'share', { act: 'sync' }, 120000)
     }
     turnAsk = ''
+    turnTrigger = ''
+    turnByPerson = true
     turnEdits = []
     return note === '' ? out : { ...out, text: out.text + '\n\n' + note }
   })

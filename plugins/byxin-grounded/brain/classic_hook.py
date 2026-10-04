@@ -4,9 +4,10 @@
 
 
   SessionStart      start event, sync, the shared-brain block as additional context
-  UserPromptSubmit  remembers the ask, beats, and passes on what other sessions did since the last prompt
+  UserPromptSubmit  remembers the ask (none for a prompt in an envelope: no one asked), beats, and passes on what
+                    other sessions did since the last prompt
   PostToolUse       an edited file joins this turn's files (matcher Edit|Write|MultiEdit|NotebookEdit)
-  Stop              the turn: what was asked and what was edited, then sync
+  Stop              the turn: what was asked and what was edited, then sync; a turn no one asked only if it edited
   SessionEnd        end event, sync
 SPDX-License-Identifier: BSD-2-Clause
 """
@@ -24,7 +25,7 @@ def _load(B):
         with open(_state_path(B), encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
-        return {"ask": "", "turn_files": [], "files": [], "heard": ""}
+        return {"ask": "", "trigger": "", "turn_files": [], "files": [], "heard": ""}
 
 
 def _save(B, st):
@@ -58,7 +59,10 @@ def main():
         _save(B, st)
         _context("SessionStart", out.get("text") or "")
     elif event == "UserPromptSubmit":
-        st["ask"], st["turn_files"] = (h.get("prompt") or "")[:600], []
+        # a classic hook is told no origin: a prompt in an envelope (a task's notification, a reminder) is no one asking
+        prompt = h.get("prompt") or ""
+        st["trigger"] = B.envelope_of(prompt) or ""
+        st["ask"], st["turn_files"] = ("" if st["trigger"] else prompt[:600]), []
         out = B.beat(dict(a, files=st["files"], since=st.get("heard")), H)
         st["heard"] = out.get("at") or st.get("heard")
         _save(B, st)
@@ -72,10 +76,12 @@ def main():
             st["files"] = sorted(set(st.get("files") or []) | {p})
             _save(B, st)
     elif event == "Stop":
-        if st.get("ask"):
-            B.turn(dict(a, ask=st["ask"], files=st.get("turn_files") or [], answer=""), H)
-            st["ask"], st["turn_files"] = "", []
-            _save(B, st)
+        # a turn no one asked is recorded only for what it edited, and says what started it
+        if st.get("ask") or (st.get("trigger") and st.get("turn_files")):
+            B.turn(dict(a, ask=st.get("ask") or "", files=st.get("turn_files") or [], answer="",
+                        trigger=st.get("trigger") or None), H)
+        st["ask"], st["turn_files"], st["trigger"] = "", [], ""
+        _save(B, st)
     elif event == "SessionEnd":
         B.end(dict(a, files=st.get("files") or []), H)
     return 0

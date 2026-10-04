@@ -225,3 +225,48 @@ def test_an_edit_never_falls_out_of_the_block_however_many_sessions_followed(wor
         bridge("turn", world["a"], "new-%d" % i, ask="question %d" % i, answer="answer")
     text = bridge("resume", world["wt"], "reader")["text"]
     assert "older session(s) not shown in full; between them they edited lexer.py" in text, text
+
+
+NOTIFICATION = ('<task-notification>\n<task-id>b3n2k56p4</task-id>\n<summary>Monitor event: "nightly build"</summary>\n'
+                '<event>build 412 finished: 3 targets, 0 failed</event>\n</task-notification>')
+
+
+def test_a_notification_is_not_someone_asking(world):
+    """Measured 2026-10-04: a session watching a long-running job recorded every monitor event as "asked: <task-notification>",
+    and the block every other session read was a wall of status lines. A turn a notification started is no one asking:
+    the mod records it only when it edited something, and says what started it; a record written before the fix (its
+    ask the notification itself) is read the same way."""
+    bridge("turn", world["a"], "mon-1", trigger="task-notification", files=["watch.sh"], answer="noted")
+    bridge("turn", world["a"], "mon-1", ask=NOTIFICATION, answer="still waiting")
+    bridge("turn", world["a"], "mon-1", ask="is the run done?", trigger="composer", answer="not yet")
+    bridge("turn", world["a"], "mon-2", ask=NOTIFICATION, answer="waiting")
+    bridge("turn", world["a"], "mon-2", ask=NOTIFICATION, answer="waiting")
+    text = bridge("resume", world["wt"], "reader")["text"]
+    assert "task-notification>" not in text and "build 412 finished" not in text, text
+    assert "after a task-notification (no one asked): edited watch.sh" in text, text
+    assert "asked: is the run done?; edited nothing" in text, text
+    assert "2 turn(s) no one asked (task-notification); edited nothing" in text, text
+
+
+def test_a_cloud_notification_is_not_someone_asking(world):
+    classic("UserPromptSubmit", world["b"], "s4-cloud", prompt=NOTIFICATION)
+    classic("Stop", world["b"], "s4-cloud")
+    classic("UserPromptSubmit", world["b"], "s4-cloud", prompt=NOTIFICATION)
+    classic("PostToolUse", world["b"], "s4-cloud", tool_name="Write", tool_input={"file_path": str(world["b"] / "LOG.md")})
+    classic("Stop", world["b"], "s4-cloud")
+    turns = [e for e in bridge("events", world["b"], "probe", n=50)["events"] if e["kind"] == "turn" and e["session"] == "s4-cloud"]
+    assert len(turns) == 1, turns
+    assert turns[0]["files"] == ["LOG.md"] and turns[0]["trigger"] == "task-notification", turns
+
+
+def test_the_mod_and_the_bridge_know_the_same_envelopes():
+    """One list, two languages: the mod decides before the model speaks, the bridge when it reads an older record."""
+    import importlib.util, re
+    spec = importlib.util.spec_from_file_location("bridge_for_test", BRIDGE)
+    b = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(b)
+    ts = open(os.path.join(HERE, "hooks", "register.tsx"), encoding="utf-8").read()
+    m = re.search(r"const ENVELOPES = \[([^\]]*)\]", ts)
+    assert m, "register.tsx must declare const ENVELOPES = [...]"
+    assert re.findall(r"'([^']+)'", m.group(1)) == list(b.ENVELOPES)
+    assert b.envelope_of(NOTIFICATION) == "task-notification" and b.envelope_of("is the run done?") is None

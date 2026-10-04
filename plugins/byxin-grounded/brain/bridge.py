@@ -19,7 +19,7 @@ JSON in on stdin, JSON out on stdout, always exit 0 with {"ok": false, "error": 
 dies silently would read as 'nothing found', the exact confusion lesson an-empty-result-is-not-a-negative-result forbids.
 SPDX-License-Identifier: BSD-2-Clause
 """
-import hashlib, importlib.util, json, os, random, socket, subprocess, sys, tempfile, time, traceback
+import hashlib, importlib.util, json, os, random, re, socket, subprocess, sys, tempfile, time, traceback
 
 MIN_TERMS_ANCHORED, MIN_TERMS_PLAIN = 1, 2   # distinct RARE question terms a lexical hit must carry
 DF_MAX = 0.02       # a term is vocabulary of the record only if it is in at most this share of the chunks
@@ -38,7 +38,20 @@ SYNC_EVERY_S = 120
 #: the plumbing commits on the shared branch carry this identity, so nobody mistakes them for a person's
 BRAIN_IDENT = {"GIT_AUTHOR_NAME": "ByxIn shared brain", "GIT_AUTHOR_EMAIL": "byxin@localhost",
                "GIT_COMMITTER_NAME": "ByxIn shared brain", "GIT_COMMITTER_EMAIL": "byxin@localhost"}
+#: The envelopes Claude Code wraps around a prompt no person typed: a background task's notification, a reminder, a CI
+#: event, a local command's echo. A turn that opens with one is no one asking (lesson a-status-line-is-not-someone-
+#: asking): measured 2026-10-04, a session watching a long-running job recorded every monitor event as "asked: <task-
+#: notification>". hooks/register.tsx keeps the same list and reads the engine's own origin of the prompt first.
+ENVELOPES = ("task-notification", "system-reminder", "ci-monitor-event", "local-command-caveat", "local-command-stdout",
+             "command-name", "bash-input", "bash-stdout", "bash-stderr")
+_ENVELOPE = re.compile(r"\s*<(%s)[\s>]" % "|".join(re.escape(e) for e in ENVELOPES))
 CTX = {}
+
+
+def envelope_of(text):
+    """The envelope a prompt opens with, or None when a person may have typed it."""
+    m = _ENVELOPE.match(text or "")
+    return m.group(1) if m else None
 
 
 # ── git, without a window and without touching anyone's index ────────────────────────────────────────────────
@@ -439,6 +452,17 @@ def live_sessions():
     return list(out.values())
 
 
+def _asked(t):
+    """Did a person ask this turn? The mod writes no ask for a turn something else started; a record written before
+    it knew (its ask the envelope itself) is read the same way."""
+    return bool(t.get("ask")) and not envelope_of(t.get("ask"))
+
+
+def _trigger(t):
+    """What started a turn no one asked: the engine's origin of the prompt, else the envelope it came in."""
+    return t.get("trigger") or envelope_of(t.get("ask")) or "notification"
+
+
 def resume_text(since=None, limit_sessions=6, limit_notes=10):
     """What the other sessions of this project did and left, as a block a session can read before it acts."""
     me, evs = CTX.get("session"), events()
@@ -459,7 +483,7 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
     ordered = sorted(by_session.items(), key=lambda kv: kv[1][-1].get("at") or "", reverse=True)
     recent, older = ordered[:limit_sessions], ordered[limit_sessions:]
     open_threads = [e for e in evs if e.get("kind") == "turn" and e.get("outcome") == "unverified" and e.get("id") not in retracted
-                    and time.time() - _epoch(e.get("at")) < 2 * 86400][-5:]
+                    and _asked(e) and time.time() - _epoch(e.get("at")) < 2 * 86400][-5:]
     if not notes and not recent and not retracted:
         return ""
     lines = ["BYXIN SHARED BRAIN -- what the other Claude Code sessions in this project did, as this mod recorded it while "
@@ -485,15 +509,24 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
         lines.append("")
         lines.append("Session %s on %s, branch %s, %s %s:" % ((sid or "?")[:8], es[-1].get("host"), es[-1].get("branch") or "?",
                                                                "ended" if ended else "last active", _ago(es[-1].get("at"))))
-        for t in turns[-3:]:
+        # a turn no one asked (a notification, a peer, a schedule) is shown only for what it edited
+        shown = [t for t in turns if _asked(t) or t.get("files")]
+        quiet = [t for t in turns if not _asked(t) and not t.get("files")]
+        answer = lambda t: "; its answer began: %s" % " ".join((t.get("answer") or "").split())[:140] if t.get("answer") else ""
+        for t in shown[-3:]:
+            if not _asked(t):
+                lines.append("  - after a %s (no one asked): edited %s%s" % (_trigger(t), ", ".join(t["files"][:6]), answer(t)))
+                continue
             # what was ASKED is not what was DONE: measured 2026-10-03, a session read "asked: create SESSION_LOG.md"
             # as the file created, while the write had been refused. So every turn says what it edited, or that it
             # edited nothing, and how its answer began.
             lines.append("  - asked: %s%s; %s%s" % (
                 (t.get("ask") or "")[:200], " -> %s" % t["outcome"] if t.get("outcome") else "",
-                "edited " + ", ".join(t["files"][:6]) if t.get("files") else "edited nothing",
-                "; its answer began: %s" % " ".join((t.get("answer") or "").split())[:140] if t.get("answer") else ""))
-        if files and not any(t.get("files") for t in turns[-3:]):
+                "edited " + ", ".join(t["files"][:6]) if t.get("files") else "edited nothing", answer(t)))
+        if quiet:
+            lines.append("  - %d turn(s) no one asked (%s); edited nothing" % (
+                len(quiet), ", ".join(sorted({_trigger(t) for t in quiet}))))
+        if files and not any(t.get("files") for t in shown[-3:]):
             lines.append("  - files edited: " + ", ".join(files[:10]))
     if older:
         # Measured 2026-10-03, the cloud session's run: the edit of a session older than the six shown fell out of the
@@ -638,8 +671,9 @@ def beat(a, H):
 
 
 def turn(a, H):
+    """One turn: what was asked (empty when no person asked: `trigger` then says what started it), what it edited."""
     ev = write_event("turn", ask=(a.get("ask") or "")[:600], answer=(a.get("answer") or "")[:600],
-                     files=list(a.get("files") or [])[:100], outcome=a.get("outcome"))
+                     files=list(a.get("files") or [])[:100], outcome=a.get("outcome"), trigger=a.get("trigger"))
     stored = None
     if a.get("outcome"):
         stored = _record(a.get("ask") or "", a["outcome"], "perceived", "answer_from_knowledge",
@@ -694,7 +728,7 @@ def retract(a, H):
 
 
 def events_list(a, H):
-    return {"ok": True, "events": [{k: e.get(k) for k in ("id", "kind", "at", "session", "host", "files", "outcome")}
+    return {"ok": True, "events": [{k: e.get(k) for k in ("id", "kind", "at", "session", "host", "files", "outcome", "trigger")}
                                    for e in events()[-int(a.get("n") or 30):]]}
 
 
