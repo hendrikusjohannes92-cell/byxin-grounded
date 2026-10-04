@@ -204,8 +204,15 @@ def engine_serves(url):
 
 
 def prepare(a, H):
-    import byxin_rerank as R
     root = os.path.abspath(a.get("root") or os.getcwd())
+    env = envelope_of(a.get("question"))
+    if env:
+        # no one asked: nothing to look up, no engine to call. Here as well as in the mod, because this bridge is started
+        # afresh for every call and so reaches a session still running an older module at once.
+        return {"ok": True, "corpus": "", "root": root, "subject": "", "chunks": 0, "anchored": False, "answerable": False,
+                "retrieval_note": "no one asked: a %s" % env, "system": "", "facts": "", "sources": [], "lessons": [],
+                "state": {}}
+    import byxin_rerank as R
     corpus = _corpus(R, root)
     q = (a.get("question") or "").strip()
     subject = H.subject_of(q)
@@ -672,11 +679,17 @@ def beat(a, H):
 
 def turn(a, H):
     """One turn: what was asked (empty when no person asked: `trigger` then says what started it), what it edited."""
-    ev = write_event("turn", ask=(a.get("ask") or "")[:600], answer=(a.get("answer") or "")[:600],
-                     files=list(a.get("files") or [])[:100], outcome=a.get("outcome"), trigger=a.get("trigger"))
+    ask, trigger, env = a.get("ask") or "", a.get("trigger"), envelope_of(a.get("ask"))
+    if env:
+        # an older module sends the notification itself as the ask: the turn is no one asking, kept only for its edits
+        if not a.get("files"):
+            return {"ok": True, "event": None, "skipped": "no one asked: a %s, and nothing was edited" % env, "sync": None}
+        ask, trigger = "", trigger or env
+    ev = write_event("turn", ask=ask[:600], answer=(a.get("answer") or "")[:600],
+                     files=list(a.get("files") or [])[:100], outcome=a.get("outcome"), trigger=trigger)
     stored = None
-    if a.get("outcome"):
-        stored = _record(a.get("ask") or "", a["outcome"], "perceived", "answer_from_knowledge",
+    if a.get("outcome") and ask:
+        stored = _record(ask, a["outcome"], "perceived", "answer_from_knowledge",
                          action=json.dumps(a.get("participation"))[:2000], narration=(a.get("answer") or "")[:4000])
     # local first: the event is on disk before anything touches the network, and any later sync carries it
     s = sync() if share_config() and a.get("sync", True) else None

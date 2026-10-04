@@ -231,21 +231,48 @@ NOTIFICATION = ('<task-notification>\n<task-id>b3n2k56p4</task-id>\n<summary>Mon
                 '<event>build 412 finished: 3 targets, 0 failed</event>\n</task-notification>')
 
 
+def old_turn(root, session, ask, answer, at):
+    """A turn event as a mod older than 0.4.1 wrote it: the notification itself recorded as the ask."""
+    hub = bridge("where", root, session)["hub"]
+    os.makedirs(os.path.join(hub, "events"), exist_ok=True)
+    eid = "%s-%s-turn-old%03d" % (at.replace("-", "").replace(":", ""), session[:8], len(os.listdir(os.path.join(hub, "events"))))
+    with open(os.path.join(hub, "events", eid + ".json"), "w", encoding="utf-8") as fh:
+        json.dump({"id": eid, "at": at, "kind": "turn", "origin": "perceived", "by": "claude-code", "session": session,
+                   "host": "desk", "branch": "main", "ask": ask, "answer": answer}, fh)
+
+
 def test_a_notification_is_not_someone_asking(world):
     """Measured 2026-10-04: a session watching a long-running job recorded every monitor event as "asked: <task-notification>",
     and the block every other session read was a wall of status lines. A turn a notification started is no one asking:
     the mod records it only when it edited something, and says what started it; a record written before the fix (its
     ask the notification itself) is read the same way."""
     bridge("turn", world["a"], "mon-1", trigger="task-notification", files=["watch.sh"], answer="noted")
-    bridge("turn", world["a"], "mon-1", ask=NOTIFICATION, answer="still waiting")
+    old_turn(world["a"], "mon-1", NOTIFICATION, "still waiting", "2026-10-04T10:00:01Z")
     bridge("turn", world["a"], "mon-1", ask="is the run done?", trigger="composer", answer="not yet")
-    bridge("turn", world["a"], "mon-2", ask=NOTIFICATION, answer="waiting")
-    bridge("turn", world["a"], "mon-2", ask=NOTIFICATION, answer="waiting")
+    old_turn(world["a"], "mon-2", NOTIFICATION, "waiting", "2026-10-04T10:00:02Z")
+    old_turn(world["a"], "mon-2", NOTIFICATION, "waiting", "2026-10-04T10:00:03Z")
     text = bridge("resume", world["wt"], "reader")["text"]
     assert "task-notification>" not in text and "build 412 finished" not in text, text
     assert "after a task-notification (no one asked): edited watch.sh" in text, text
     assert "asked: is the run done?; edited nothing" in text, text
     assert "2 turn(s) no one asked (task-notification); edited nothing" in text, text
+
+
+def test_the_bridge_refuses_a_notification_whatever_mod_sends_it(world):
+    """The bridge is started afresh for every call, so a session still running an older module gets this at once: a
+    notification is not looked up in the record (no engine call), and a turn it started is written only for what it
+    edited, as no one asking."""
+    p = bridge("prepare", world["a"], "old-mod", question=NOTIFICATION)
+    assert p["answerable"] is False and p["anchored"] is False and p["chunks"] == 0, p
+    assert "no one asked" in (p.get("retrieval_note") or ""), p
+    t = bridge("turn", world["a"], "old-mod", ask=NOTIFICATION, answer="still waiting")
+    assert t.get("event") is None and "no one asked" in t.get("skipped", ""), t
+    bridge("turn", world["a"], "old-mod", ask=NOTIFICATION, files=["LOG.md"], answer="logged")
+    turns = [e for e in bridge("events", world["a"], "probe", n=50)["events"] if e["kind"] == "turn" and e["session"] == "old-mod"]
+    assert len(turns) == 1 and turns[0]["files"] == ["LOG.md"] and turns[0]["trigger"] == "task-notification", turns
+    hub = bridge("where", world["a"], "probe")["hub"]
+    with open(os.path.join(hub, "events", turns[0]["id"] + ".json"), encoding="utf-8") as fh:
+        assert "ask" not in json.load(fh), "a turn no one asked carries no ask"
 
 
 def test_a_cloud_notification_is_not_someone_asking(world):
