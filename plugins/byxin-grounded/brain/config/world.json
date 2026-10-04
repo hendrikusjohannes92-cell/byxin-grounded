@@ -1,0 +1,30 @@
+{
+  "name": "",
+  "record": "the record I was given",
+  "identity": "You are ByxIn, answering a question about the record you were given.",
+  "facts_source": "the record you were given",
+  "exam": "",
+  "authority_pages": [],
+  "world_model": {
+    "deriver": "",
+    "sources": []
+  },
+  "places": {
+    "by_path": [],
+    "by_question": []
+  },
+  "claim_kinds": {
+    "by_path": []
+  },
+  "derived_pages": {
+    "pages": []
+  },
+  "guards": [],
+  "diary_dirs": [],
+  "not_anchors": [
+    "ByxIn"
+  ],
+  "knowledge_header": "[Knowledge — confidence: %.2f]",
+  "os_name": "the OS",
+  "os_paths": []
+}

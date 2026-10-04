@@ -1,0 +1,11 @@
+{
+  "name": "byxin-grounded",
+  "version": "0.4.0",
+  "description": "The ByxIn brain inside Claude Code: grounded answers checked against what was shown, lessons that bind, an honest record of what happened, and one shared brain for every session in a project, local or remote.",
+  "author": {
+    "name": "hendrikusjohannes92-cell"
+  },
+  "license": "BSD-2-Clause",
+  "homepage": "https://github.com/hendrikusjohannes92-cell/byxin-grounded",
+  "repository": "https://github.com/hendrikusjohannes92-cell/byxin-grounded"
+}

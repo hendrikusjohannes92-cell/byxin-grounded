@@ -1,0 +1,14 @@
+{
+  "name": "byxin",
+  "owner": {
+    "name": "hendrikusjohannes92-cell"
+  },
+  "plugins": [
+    {
+      "name": "byxin-grounded",
+      "source": "./plugins/byxin-grounded",
+      "description": "The ByxIn brain inside Claude Code: grounded answers checked against what was shown, lessons that bind, an honest record of what happened, and one shared brain for every session in a project, local or remote.",
+      "version": "0.4.0"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "embedding_model": "nomic-embed-text",
+  "embedding_host": "127.0.0.1",
+  "embedding_port": 11434,
+  "native_model_path": "models/nomic-embed-text-v1.5.Q8_0.gguf",
+  "prefer_native": true,
+  "vector_dimensions": 768,
+  "index_file": "data/cerebellum_index.bin",
+  "max_vectors": 50000,
+  "top_k": 5,
+  "confidence_threshold": 0.3,
+  "embedder_lru_cache_size": 4096,
+  "slow_path_model": "qwen2.5",
+  "slow_path_port": 11434,
+  "auto_rebuild_threshold": 50,
+  "watch_directories": [],
+  "gpu_backend": "vulkan",
+  "cpu_fallback": true,
+  "rag": {
+    "enabled": true,
+    "min_confidence": 0.6,
+    "max_context_chunks": 8
+  },
+  "skill_library": {
+    "enabled": true,
+    "persist_dir": "data/hive/skills",
+    "min_retrieval_confidence": 0.8,
+    "min_store_confidence": 0.65,
+    "max_skills": 10000,
+    "compact_min_success_rate": 0.3,
+    "embed_field": "description"
+  },
+  "warmup_enabled": false
+}
