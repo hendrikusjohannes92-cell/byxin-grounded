@@ -33,7 +33,7 @@ const QUESTION = /\?\s*$|^\s*(what|why|how|where|when|who|which|is|are|does|do|d
 // prompt in one of these envelopes is not either. brain/bridge.py keeps the same envelopes for older records.
 const NOT_A_PERSON = new Set(['task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay',
   'coordinator', 'observer', 'observer-activity', 'plugin'])
-const ENVELOPES = ['task-notification', 'system-reminder', 'ci-monitor-event', 'local-command-caveat', 'local-command-stdout', 'command-name', 'bash-input', 'bash-stdout', 'bash-stderr']
+const ENVELOPES = ['task-notification', 'system-reminder', 'ci-monitor-event', 'local-command-caveat', 'local-command-stdout', 'command-name', 'bash-input', 'bash-stdout', 'bash-stderr', 'agent-message']
 const ENVELOPE = new RegExp(`^\\s*<(${ENVELOPES.join('|')})[\\s>]`)
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 // python3 first (Linux, macOS, a cloud box); python and the launcher where Windows has no python3
@@ -49,6 +49,11 @@ const TOOLS: Record<string, { script: string; why: string }> = {
 }
 
 const words = (s: string): string[] => s.trim().split(/\s+/).filter(Boolean)
+// THE SIGIL, asked for 2026-10-05: "visual feedback from ByxIn grounded showing the )|( when it is active". It marks a turn
+// a layer acted on -- facts or a refusal injected, the comparator's verdict, news from the other sessions -- and never
+// a prompt passed through untouched, so the sigil claims no more than happened.
+const SIGIL = ')|('
+const sigil = (active: boolean, text: string): string => `${active ? SIGIL + ' ' : ''}ByxIn: ${text}`
 const tail = (s: string, n: number): string => (s.length > n ? '…' + s.slice(s.length - n) : s)
 
 let cwd = ''
@@ -74,7 +79,10 @@ let live: Live[] = []
 let resumeText = ''
 let resumeShown = false
 let news = ''
+// heardAt: how far this session has been SHOWN the others' events; newsAt: how far the waiting news reaches. A beat
+// asks for everything since heardAt, so news waits whole until a prompt shows it; nothing is lost between beats.
 let heardAt = ''
+let newsAt = ''
 let lastBeat = 0
 const alerts: string[] = []
 const warned = new Set<string>()
@@ -84,10 +92,16 @@ let engineModel = 'haiku'
 let served = 0
 let lastFailure = ''
 
-function rel(p: string): string {
+// A path inside the project, relative to the session's tree or the project's main tree; null for anything outside
+// (a scratchpad, a memory file, another repository). Measured 2026-10-05: those were shown to every session as
+// "editing", and they are none of this project's business.
+function rel(p: string): string | null {
   const n = p.replace(/\\/g, '/')
-  const r = root.replace(/\\/g, '/').replace(/\/$/, '')
-  return r !== '' && n.toLowerCase().startsWith(r.toLowerCase() + '/') ? n.slice(r.length + 1) : n
+  for (const base of [root, project]) {
+    const b = base.replace(/\\/g, '/').replace(/\/$/, '')
+    if (b !== '' && n.toLowerCase().startsWith(b.toLowerCase() + '/')) return n.slice(b.length + 1)
+  }
+  return /^([A-Za-z]:|\/)/.test(n) || n === '..' || n.startsWith('../') ? null : n
 }
 
 async function run($: Api, op: string, args: Record<string, unknown> = {}, timeoutMs = 60000): Promise<Reply> {
@@ -128,8 +142,8 @@ async function heartbeat($: Api): Promise<void> {
   const r = await run($, 'beat', { files: [...sessionEdits], since: heardAt }, 90000)
   if (!r.ok) return
   live = (r.live as Live[] | undefined) ?? []
-  if (typeof r.news === 'string' && r.news !== '') news = r.news
-  if (typeof r.at === 'string') heardAt = r.at
+  if (typeof r.news === 'string') news = r.news
+  if (typeof r.at === 'string') newsAt = r.at
 }
 
 export const register: Register = on => {
@@ -189,7 +203,10 @@ export const register: Register = on => {
 
     const extra: string[] = []
     if (!resumeShown && resumeText !== '') extra.push(resumeText)
-    else if (news !== '') extra.push(news)
+    else if (news !== '') {
+      extra.push(news)
+      if (newsAt !== '') heardAt = newsAt
+    }
     resumeShown = true
     news = ''
     extra.push(...alerts.splice(0))
@@ -197,7 +214,10 @@ export const register: Register = on => {
 
     // a notification is not a question to ground: no retrieval, no engine call, no comparator for it
     const isOn = turnByPerson && (mode === 'always' || (QUESTION.test(e.text) && !e.text.startsWith('/')))
-    if (!isOn) return next(ev)
+    if (!isOn) {
+      if (extra.length) $.ui.status(sigil(true, 'shared brain: news from the other sessions'))
+      return next(ev)
+    }
     if (PY === null) {
       return next({ ...ev, context: [...(ev.context ?? []), 'ByxIn could not consult the record: no Python 3 on this machine. Say so if the answer depends on the record.'] })
     }
@@ -209,15 +229,17 @@ export const register: Register = on => {
     const prep = r as unknown as Prepared
     asked += 1
     pending = { question: e.text, state: prep.state, lessons: prep.lessons, chunks: prep.chunks }
-    $.ui.status(`ByxIn: ${prep.chunks} chunks, ${prep.lessons.length} lessons${prep.retrieval_note ? ' (lexical)' : ''}`)
-
     // Conversation is not the record's business: with nothing retrieved and nothing in the question that can be looked
     // up by its letters (an identifier, a path), the prompt goes through untouched and nothing is checked afterward.
     if (!prep.answerable && !prep.anchored) {
       pending = null
-      $.ui.status('ByxIn: nothing in the record for this; passed through')
+      $.ui.status(sigil(extra.length > 0, extra.length ? 'shared brain: news; nothing in the record for this question'
+        : 'nothing in the record for this; passed through'))
       return next(ev)
     }
+    const lexical = String(prep.retrieval_note ?? '').startsWith('dense lane unavailable') ? ' (lexical lanes)' : ''
+    $.ui.status(sigil(true, prep.answerable ? `grounding · ${prep.chunks} passages · ${prep.lessons.length} lessons${lexical}`
+      : 'grounding · the record lacks what this names'))
     const block = prep.answerable
       ? prep.system
       : 'ByxIn retrieved nothing from the record for this question, which names something that should be there. Answer exactly that you cannot see it in the record and stop; do not fill the gap from general knowledge, and do not invent a file, number or citation. Reading files yourself is still allowed: what you read becomes evidence.'
@@ -234,8 +256,8 @@ export const register: Register = on => {
     if (!failed && EDIT_TOOLS.has(e.tool)) {
       const input = e as { file_path?: string; notebook_path?: string }
       const p = input.file_path ?? input.notebook_path
-      if (p) {
-        const r = rel(p)
+      const r = p ? rel(p) : null
+      if (r !== null) {
         turnEdits.push(r)
         sessionEdits.add(r)
         const other = live.find(s => (s.files ?? []).some(f => f.toLowerCase() === r.toLowerCase()))
@@ -275,7 +297,7 @@ export const register: Register = on => {
         outcome = a.verified ? 'verified' : 'unverified'
         participation = { chunks: turn.chunks, lessons: turn.lessons, comparator: a }
         note = a.verified ? '' : chk.note
-        $.ui.status(`ByxIn: ${a.verified ? 'verified' : 'UNVERIFIED'} · ${turn.chunks} chunks · ${turn.lessons.length} lessons · ${unverified}/${asked} flagged`)
+        $.ui.status(sigil(true, `${a.verified ? 'verified' : 'UNVERIFIED'} · ${turn.chunks} passages · ${turn.lessons.length} lessons · ${unverified}/${asked} flagged`))
       }
     }
     pending = null

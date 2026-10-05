@@ -43,7 +43,8 @@ BRAIN_IDENT = {"GIT_AUTHOR_NAME": "ByxIn shared brain", "GIT_AUTHOR_EMAIL": "byx
 #: asking): measured 2026-10-04, a session watching a long-running job recorded every monitor event as "asked: <task-
 #: notification>". hooks/register.tsx keeps the same list and reads the engine's own origin of the prompt first.
 ENVELOPES = ("task-notification", "system-reminder", "ci-monitor-event", "local-command-caveat", "local-command-stdout",
-             "command-name", "bash-input", "bash-stdout", "bash-stderr")
+             "command-name", "bash-input", "bash-stdout", "bash-stderr",
+             "agent-message")
 _ENVELOPE = re.compile(r"\s*<(%s)[\s>]" % "|".join(re.escape(e) for e in ENVELOPES))
 CTX = {}
 
@@ -180,15 +181,93 @@ def _corpus(R, root):
     return "session repository (minus %s)" % ", ".join(skip)
 
 
-def _anchored(R, subject):
-    """Does the question name something that can be looked up by its letters -- an identifier, a path, a CamelCase
-    name, a quoted phrase? A bare number or year anchors nothing. Conversation ("how can we test it?") names none."""
-    return any(not t.replace("-", "").replace(".", "").isdigit() for t in R.exact_tokens_in(subject))
+def _anchored(R, subject, common=lambda t: False, tokens=lambda s: [s]):
+    """
+    """
+    return any(not t.replace("-", "").replace(".", "").isdigit() and not all(common(w) for w in tokens(t) or [t])
+               for t in R.exact_tokens_in(subject))
+
+
+#: Words a question is made of, never what it is about. Measured 2026-10-05 on a 61-page project: "how does the
+#: AcmeOS tokenizer split input?" scored 0.40 coverage on the one page that answers it, because "how" and "does" were
+#: in no page and so weighed as the rarest terms of all. A large record hides this (they are common there); a small
+#: one does not.
+QUESTION_WORDS = frozenset(
+    "a about all also an and any are as at be been but by can could did do does each every for from had has have he her "
+    "his how i if in into is it its just me many more most much my no not now of on only or our out over please she should show so "
+    "some tell than that the their them then there these they this those to under up us very was we were what when "
+    "where which who whom why will with would yes you your explain describe".split())
+
+
+def _judge(R, B, subject, root):
+    """How this record judges a question: the IDF weight of each of its rare terms (a word in more than DF_MAX of the
+    chunks is not vocabulary of the record -- the project's own name), whether it is anchored, and covers(content,
+    source) -> the share of that weight a passage carries, 0.0 under the minimum number of distinct rare terms."""
+    idx = B.load(root)
+    n_chunks, post = len(idx.get("chunks") or []), idx.get("postings") or {}
+    df = lambda t: len(post.get(t) or []) // 2
+    common = lambda t: bool(df(t)) and df(t) > DF_MAX * n_chunks
+    weights = {t: (B.idf(df(t), n_chunks) if df(t) else B.idf(1, n_chunks)) for t in set(B.tokens(subject, expand=False))
+               if not common(t) and t not in QUESTION_WORDS}
+    total = sum(weights.values()) or 1.0
+    anchored = _anchored(R, subject, common, lambda s: B.tokens(s, expand=False))
+    need = MIN_TERMS_ANCHORED if anchored else MIN_TERMS_PLAIN
+
+    def covers(content, source=""):
+        have = set(B.tokens(content, expand=True)) | set(B.tokens(str(source).replace("\\", "/"), expand=True))   # a file is also its own name
+        if sum(1 for t in weights if t in have) < need:
+            return 0.0                          # too few of the question's own terms: a coincidence, not an answer
+        return sum(w for t, w in weights.items() if t in have) / total
+    return covers, (COVERAGE_ANCHORED if anchored else COVERAGE), anchored, bool(weights)
+
+
+#: how long the answer to "is this engine this project's brain?" is kept: it changes only when an engine is swapped
+ENGINE_SERVES_TTL = 600
+
+
+def mark_ask():
+    """MEASUREMENTS YIELD TO A PERSON (the user, 2026-10-01). Before this layer asks a brain tree's live engine anything,
+    it leaves a mark in the tree -- when, which session, nothing of the question -- and the tree's bench reads it as a
+    person present (byxin_bench.person_present). Measured 2026-10-04: every question in a Claude Code session made three
+    engine calls the bench could not see. A vendored brain has no bench to tell."""
+    if CTX.get("vendored") or not CTX.get("tree"):
+        return
+    try:
+        d = os.path.join(CTX["tree"], "data")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "answering_layer_ask.json")
+        with open(p + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump({"at": _now(), "session": (CTX.get("session") or "")[:8], "host": CTX.get("host")}, fh)
+        os.replace(p + ".tmp", p)
+    except OSError:
+        pass
 
 
 def engine_serves(url):
     """
     """
+    base = os.path.dirname(HERE) if CTX.get("vendored") else CTX.get("tree") or ""
+    cache = os.path.join(_dir("runtime"), "engine_serves.json")
+    key = "%s|%s" % (url, os.path.normcase(os.path.abspath(base)))
+    try:
+        with open(cache, encoding="utf-8") as fh:
+            c = json.load(fh)
+        if c.get("key") == key and time.time() - float(c.get("t") or 0) < ENGINE_SERVES_TTL:
+            return c.get("serves")
+    except (OSError, ValueError):
+        pass
+    serves = _engine_serves(url, base)
+    if serves is not None:
+        try:
+            with open(cache + ".tmp", "w", encoding="utf-8") as fh:
+                json.dump({"key": key, "t": time.time(), "serves": serves}, fh)
+            os.replace(cache + ".tmp", cache)
+        except OSError:
+            pass
+    return serves
+
+
+def _engine_serves(url, base):
     import urllib.request
     try:
         req = urllib.request.Request(url, data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "byxin.episodic.stats",
@@ -198,7 +277,6 @@ def engine_serves(url):
             writer = (json.loads(r.read().decode("utf-8", "replace")).get("result") or {}).get("writer") or ""
     except Exception:
         return None
-    base = os.path.dirname(HERE) if CTX.get("vendored") else CTX.get("tree") or ""
     w, b = os.path.normcase(os.path.abspath(writer)), os.path.normcase(os.path.abspath(base))
     return bool(writer) and w.startswith(b.rstrip(os.sep) + os.sep)
 
@@ -213,11 +291,14 @@ def prepare(a, H):
                 "retrieval_note": "no one asked: a %s" % env, "system": "", "facts": "", "sources": [], "lessons": [],
                 "state": {}}
     import byxin_rerank as R
+    import byxin_bm25 as B
     corpus = _corpus(R, root)
     q = (a.get("question") or "").strip()
     subject = H.subject_of(q)
-    block, kept, top, retrieval_note, anchored = "", [], 0.0, None, _anchored(R, subject)
+    covers, floor, anchored, judged = _judge(R, B, subject, root)
+    block, kept, top, retrieval_note = "", [], 0.0, None
     url = "http://127.0.0.1:%s/" % H._rpc_port()
+    mark_ask()                                     # the tree's bench learns a person is asking before the engine does
     try:                                           # the dense lane needs the C++ engine AND an embedder behind it
         if engine_serves(url) is False:
             raise LookupError("the engine on %s serves another brain tree, not this project's" % url)
@@ -226,35 +307,22 @@ def prepare(a, H):
             raise LookupError("the engine returned no dense hits (no embedder behind it)")
         # real dense hits: the retriever's own measured floor applies, and its lexical joins ride with it
         block, kept, top = R.retrieve(subject, max_chunks=H.TOP_K, url=url)
+        if judged and kept:
+            # then the coverage floor; a question whose every word is common to the record cannot be judged by it,
+            # and keeps the retriever's own floor
+            cov = [covers(h.get("content") or "", h.get("source") or "") for h in kept]
+            held = [h for h, c in zip(kept, cov) if c >= floor]
+            if len(held) < len(kept):
+                retrieval_note = "%d of %d dense passage(s) under the coverage floor %.2f (coverage/similarity %s)" % (
+                    len(kept) - len(held), len(kept), floor,
+                    ",".join("%.2f/%.2f" % (c, float(h.get("adjusted") or h.get("similarity") or 0.0)) for h, c in zip(kept, cov)))
+                kept = held
+                block = "\n\n".join("Source: %s\n%s" % (h.get("source") or "?", (h.get("content") or "").strip()) for h in kept)
+                top = max((float(h.get("adjusted") or h.get("similarity") or 0.0) for h in kept), default=0.0)
     except Exception as e:
         retrieval_note = "dense lane unavailable (%s: %s); lexical lanes only" % (type(e).__name__, str(e)[:160])
         lex = R.identifier_hits(subject, 0.0, root=root)
-        import byxin_bm25 as B
-        # THE LEXICAL FLOOR. The dense lane has a measured similarity floor; BM25 has no similarity to floor, and
-        # without one an off-topic question ("airspeed of a swallow") still returns the files that happen to say
-        # 'swallow'. So the retrieval must cover the question: the IDF mass of the terms a chunk matches over the
-        # IDF mass of all the question's terms, an absent term weighing the most. Below COVERAGE the record does
-        # not hold the question and the layer refuses -- the green must be able to go red.
-        idx = B.load(root)
-        n_chunks, post = len(idx.get("chunks") or []), idx.get("postings") or {}
-        weights = {}
-        for t in set(B.tokens(subject, expand=False)):
-            n = len(post.get(t) or []) // 2
-            if n and n > DF_MAX * n_chunks:
-                continue                        # a word in more than DF_MAX of the chunks is not vocabulary of this record
-            weights[t] = B.idf(n, n_chunks) if n else B.idf(1, n_chunks) * 1.0
-        total = sum(weights.values()) or 1.0
         rejected = []
-        anchored = _anchored(R, subject)
-        need = MIN_TERMS_ANCHORED if anchored else MIN_TERMS_PLAIN
-
-        floor = COVERAGE_ANCHORED if anchored else COVERAGE
-
-        def covers(content, source=""):
-            have = set(B.tokens(content, expand=True)) | set(B.tokens(source.replace("\\", "/"), expand=True))   # a file is also its own name
-            if sum(1 for t in weights if t in have) < need:
-                return 0.0                      # too few of the question's own terms: a coincidence, not an answer
-            return sum(w for t, w in weights.items() if t in have) / total
         kept_lex = []
         for h in lex:
             c = covers(h.get("content") or "", str(h.get("source") or ""))
@@ -417,7 +485,7 @@ def beat_file(files):
     """This session's presence: overwritten in place, never synced -- liveness is local; elsewhere it is the events."""
     p = os.path.join(_dir("presence"), "%s.json" % (CTX.get("session") or "nosession").replace(os.sep, "_"))
     rec = {"session": CTX.get("session"), "host": CTX.get("host"), "branch": _branch(), "at": _now(),
-           "files": sorted(set(files or []))[:200]}
+           "files": sorted(set(_project_files(files)))[:200]}
     with open(p + ".tmp", "w", encoding="utf-8") as fh:
         json.dump(rec, fh)
     os.replace(p + ".tmp", p)
@@ -459,6 +527,68 @@ def live_sessions():
     return list(out.values())
 
 
+#: the most a block may carry before it is cut at a line (the full record stays one command away: /byxin brain)
+BLOCK_CAP, NEWS_CAP = 5000, 2500
+
+
+def _in_project(f):
+    """A path the shared brain may name: relative, inside the project. Measured 2026-10-05: sessions were shown
+    "editing" scratchpads, memory files and other repositories -- none of them this project's business."""
+    f = str(f or "").replace("\\", "/")
+    return bool(f) and not f.startswith("/") and not re.match(r"^[A-Za-z]:", f) and f != ".." and not f.startswith("../")
+
+
+def _project_files(files):
+    return [f for f in (files or []) if _in_project(f)]
+
+
+def _edited(t):
+    """What a turn edited, as the block says it: the project's files, or that it touched only files outside."""
+    mine = _project_files(t.get("files"))
+    if mine:
+        return "edited " + ", ".join(mine[:6])
+    return "edited only files outside the project" if t.get("files") else "edited nothing"
+
+
+def _cap(lines, cap):
+    out, n = [], 0
+    for line in lines:
+        if n + len(line) + 1 > cap:
+            out.append("  ... (cut at %d characters; /byxin brain shows the whole record)" % cap)
+            break
+        out.append(line)
+        n += len(line) + 1
+    return "\n".join(out)
+
+
+def news_text(since):
+    """What changed since this session last heard: sessions that started or ended, turns that asked or edited, notes,
+    corrections. A turn no one asked that edited nothing is not news."""
+    me, evs = CTX.get("session"), events()
+    new = [e for e in evs if (e.get("at") or "") > since and e.get("session") != me]
+    lines = []
+    for e in new:
+        who = "session %s on %s, branch %s" % ((e.get("session") or "?")[:8], e.get("host"), e.get("branch") or "?")
+        kind = e.get("kind")
+        if kind == "start":
+            lines.append("  - %s: started" % who)
+        elif kind == "end":
+            lines.append("  - %s: ended" % who)
+        elif kind == "note":
+            lines.append("  - note left for every session (told): %s (%s)" % (e.get("text"), who))
+        elif kind == "retract":
+            lines.append("  - correction: %s was wrong: %s (%s)" % (e.get("retracts"), e.get("why") or "no reason given", who))
+        elif kind == "turn" and _asked(e):
+            lines.append("  - %s: asked: %s%s; %s" % (who, (e.get("ask") or "")[:200],
+                                                     " -> %s" % e["outcome"] if e.get("outcome") else "", _edited(e)))
+        elif kind == "turn" and _project_files(e.get("files")):
+            lines.append("  - %s: after a %s (no one asked): %s" % (who, _trigger(e), _edited(e)))
+    if not lines:
+        return ""
+    return _cap(["BYXIN SHARED BRAIN -- new since your last prompt, as this mod recorded it (perceived; a note is told). "
+                 "Read a file before relying on what another session did to it."] + lines, NEWS_CAP)
+
+
 def _asked(t):
     """Did a person ask this turn? The mod writes no ask for a turn something else started; a record written before
     it knew (its ask the envelope itself) is read the same way."""
@@ -477,9 +607,7 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
     # this project retracts in the record rather than editing a claim into a different one.
     retracted = {e.get("retracts"): e for e in evs if e.get("kind") == "retract" and e.get("retracts")}
     if since:
-        evs_new = [e for e in evs if (e.get("at") or "") > since and e.get("session") != me]
-        if not evs_new:
-            return ""
+        return news_text(since)
     notes = [e for e in evs if e.get("kind") == "note"][-limit_notes:]
     by_session = {}
     for e in evs:
@@ -500,9 +628,10 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
         lines.append("")
         lines.append("Working in this project right now:")
         for s in live.values():
+            editing = _project_files(s.get("files"))
             lines.append("  - session %s on %s (%s), branch %s, last seen %s%s" % (
                 (s.get("session") or "?")[:8], s.get("host"), s.get("where"), s.get("branch") or "?", _ago(s.get("at")),
-                "; editing " + ", ".join(s.get("files")[:8]) if s.get("files") else ""))
+                "; editing " + ", ".join(editing[:8]) if editing else ""))
     if notes:
         lines.append("")
         lines.append("Notes left for every session (told):")
@@ -511,38 +640,37 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
                                                             n.get("host")))
     for sid, es in recent:
         turns = [e for e in es if e.get("kind") == "turn" and e.get("id") not in retracted]
-        files = sorted({f for e in turns for f in (e.get("files") or [])})
+        files = sorted({f for e in turns for f in _project_files(e.get("files"))})
         ended = any(e.get("kind") == "end" for e in es)
         lines.append("")
         lines.append("Session %s on %s, branch %s, %s %s:" % ((sid or "?")[:8], es[-1].get("host"), es[-1].get("branch") or "?",
                                                                "ended" if ended else "last active", _ago(es[-1].get("at"))))
         # a turn no one asked (a notification, a peer, a schedule) is shown only for what it edited
-        shown = [t for t in turns if _asked(t) or t.get("files")]
-        quiet = [t for t in turns if not _asked(t) and not t.get("files")]
+        shown = [t for t in turns if _asked(t) or _project_files(t.get("files"))]
+        quiet = [t for t in turns if not _asked(t) and not _project_files(t.get("files"))]
         answer = lambda t: "; its answer began: %s" % " ".join((t.get("answer") or "").split())[:140] if t.get("answer") else ""
         for t in shown[-3:]:
             if not _asked(t):
-                lines.append("  - after a %s (no one asked): edited %s%s" % (_trigger(t), ", ".join(t["files"][:6]), answer(t)))
+                lines.append("  - after a %s (no one asked): %s%s" % (_trigger(t), _edited(t), answer(t)))
                 continue
             # what was ASKED is not what was DONE: measured 2026-10-03, a session read "asked: create SESSION_LOG.md"
             # as the file created, while the write had been refused. So every turn says what it edited, or that it
             # edited nothing, and how its answer began.
             lines.append("  - asked: %s%s; %s%s" % (
-                (t.get("ask") or "")[:200], " -> %s" % t["outcome"] if t.get("outcome") else "",
-                "edited " + ", ".join(t["files"][:6]) if t.get("files") else "edited nothing", answer(t)))
+                (t.get("ask") or "")[:200], " -> %s" % t["outcome"] if t.get("outcome") else "", _edited(t), answer(t)))
         if quiet:
-            lines.append("  - %d turn(s) no one asked (%s); edited nothing" % (
+            lines.append("  - %d turn(s) no one asked (%s); edited nothing in the project" % (
                 len(quiet), ", ".join(sorted({_trigger(t) for t in quiet}))))
-        if files and not any(t.get("files") for t in shown[-3:]):
+        if files and not any(_project_files(t.get("files")) for t in shown[-3:]):
             lines.append("  - files edited: " + ", ".join(files[:10]))
     if older:
         # Measured 2026-10-03, the cloud session's run: the edit of a session older than the six shown fell out of the
         # block, and the model could only call it another session's claim. An edit never falls out: the older sessions
         # are summed up in one line with every file they changed.
         of = sorted({f for _sid, es in older for e in es if e.get("kind") == "turn" and e.get("id") not in retracted
-                     for f in (e.get("files") or [])})
+                     for f in _project_files(e.get("files"))})
         lines.append("")
-        lines.append("%d older session(s) not shown in full; %s." % (
+        lines.append("%d older session(s) not shown in full; %s (/byxin brain shows them)." % (
             len(older), "between them they edited " + ", ".join(of[:20]) if of else "they edited nothing"))
     if retracted:
         lines.append("")
@@ -554,7 +682,11 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
         lines.append("Left open (answers the comparator could not verify):")
         for t in open_threads:
             lines.append("  - %s (session %s, %s)" % ((t.get("ask") or "")[:160], (t.get("session") or "?")[:8], _ago(t.get("at"))))
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if len(text) > BLOCK_CAP and limit_sessions > 1:
+        # too long: fewer sessions in full, the rest summed up in the older-sessions line, so no edit falls out
+        return resume_text(None, limit_sessions - 1, limit_notes)
+    return _cap(lines, BLOCK_CAP)
 
 
 def share_config():

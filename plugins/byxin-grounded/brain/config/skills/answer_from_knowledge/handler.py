@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 
+WHY THIS LAYER EXISTS. The user, 2026-09-30: "Add new layers off the brain when needed." The need was measured that
+day and it is specific: the brain has a corpus that holds the answers, retrieval that reaches them, and no layer
+whose JOB is to answer a question.
 
 
 
@@ -14,12 +17,6 @@ tools/test_the_answering_layer_cannot_act.py:
        "skill", "skill_run" or "intent" field, so nothing downstream can mistake its output for something
        to dispatch.
 
-AND THE RULE THAT MATTERS MOST. It answers ONLY from what retrieval returned, and when retrieval returns
-nothing it says so and stops. This is not politeness: the ideas ledger measured that when ByxIn lacks grounding
-it invents a plausible filename and a plausible citation rather than refusing, in a prompt that explicitly
-forbade inventing. A layer can enforce structurally what a prompt could not: with no facts, there is no answer
-to give, so it returns `answered: false` and the reason. Every answer carries its Source lines so a reader can
-check it against the file.
 
 """
 import datetime
@@ -31,6 +28,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+#: The only methods this layer may call. All three read; none dispatches. byxin.episodic.stats is the brain's
+#: own memory reporting on itself (how much it wrote, when, whether its gate is deciding) -- interoception,
+#: added 2026-09-30 when the user asked "are we actually writing history?" and the honest answer had to be measured.
 ALLOWED_METHODS = ("cerebellum.query", "byxin.llm_complete", "byxin.episodic.stats")
 #: Questions about the brain's own memory get a live self-report beside the retrieved facts. Recognition, like a
 #: lesson: the words that ask about remembering, not every question that happens to contain "record".

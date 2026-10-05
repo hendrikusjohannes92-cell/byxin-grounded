@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """byxin_surprise.py -- write an episode when it is surprising; strengthen the memory when it is not.
 
-ByxIn proposed this itself on 2026-09-30 (ideas ledger #25: "a real-time memory encoding policy based on
-surprise-driven writes"), grounded in the Titans paper that sits in its own corpus. That note, injected
-2026-05-28 and flagged HIGH relevance, says in as many words:
 
 
 Four months later the store had 71926 episodes across 1344 distinct intents, and "execute imu node" appeared

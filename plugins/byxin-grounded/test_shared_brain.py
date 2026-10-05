@@ -297,3 +297,48 @@ def test_the_mod_and_the_bridge_know_the_same_envelopes():
     assert m, "register.tsx must declare const ENVELOPES = [...]"
     assert re.findall(r"'([^']+)'", m.group(1)) == list(b.ENVELOPES)
     assert b.envelope_of(NOTIFICATION) == "task-notification" and b.envelope_of("is the run done?") is None
+
+
+def test_a_later_prompt_hears_only_what_is_new(world):
+    """
+    """
+    import time
+    bridge("turn", world["a"], "s1-local", ask="first ask about the lexer", answer="ok")
+    heard = bridge("start", world["wt"], "reader")
+    assert "first ask about the lexer" in heard["text"]
+    time.sleep(1.2)                                       # events are stamped to the second
+    bridge("turn", world["a"], "s1-local", ask="second ask about the parser", files=["parse.py"], answer="done")
+    bridge("note", world["a"], "s2-local", text="the release is frozen until Friday")
+    news = bridge("beat", world["wt"], "reader", since=heard["at"])["news"]
+    assert "second ask about the parser" in news and "edited parse.py" in news, news
+    assert "the release is frozen until Friday" in news, news
+    assert "first ask about the lexer" not in news, news
+    again = bridge("beat", world["wt"], "reader", since=bridge("beat", world["wt"], "reader")["at"])["news"]
+    assert again == "", "nothing new is no news: %r" % again
+
+
+def test_only_files_in_the_project_are_named(world):
+    """Measured 2026-10-05: sessions were shown "editing" scratchpad and memory files outside the project. The shared
+    brain is about this project; a path outside it is never named, and a turn that edited only such files says so."""
+    outside = ["Z:/scratch/probe.py", "../elsewhere/notes.md", "/tmp/x.json"]
+    bridge("turn", world["a"], "s1-local", ask="refactor the parser", files=["parse.py"] + outside, answer="done")
+    bridge("turn", world["a"], "s1-local", ask="write a scratch probe", files=outside[:1], answer="written")
+    bridge("beat", world["a"], "s1-local", files=["parse.py"] + outside)
+    text = bridge("start", world["wt"], "reader")["text"]
+    assert "parse.py" in text, text
+    assert "probe.py" not in text and "elsewhere" not in text and "/tmp/" not in text, text
+    assert "write a scratch probe; edited only files outside the project" in text, text
+
+
+def test_the_block_has_a_cap(world):
+    for i in range(9):
+        for j in range(3):
+            bridge("turn", world["a"], "busy-%d" % i, ask=("question %d.%d " % (i, j)) + "about a long topic " * 12,
+                   files=["src/module_%d_%d.py" % (i, k) for k in range(12)], answer="an answer " * 30)
+    text = bridge("start", world["wt"], "reader")["text"]
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bridge_for_cap", BRIDGE)
+    b = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(b)
+    assert len(text) <= b.BLOCK_CAP + 120, len(text)
+    assert "/byxin brain" in text, text[-300:]

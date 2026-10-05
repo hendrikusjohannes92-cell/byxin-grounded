@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """byxin_lessons.py -- the school half of the loop: a lesson is a correction that binds NEXT time.
 
+The user, 2026-09-30: "like it is a teenager learning stuff by trial and error and you as a school that injects
+lessons to it", and "keep ByxIn in the loop, it should learn from its own lessons".
 
 WHAT WAS ALREADY THERE, AND WHY IT IS NOT THIS. _agent_hook/main-pc/lessons/ holds 145 files, and every one is a
 REPORT CARD: {ts, curriculum, lesson_id, prompts_run, passes, pass_rate, leak_count, ...}. They record how a

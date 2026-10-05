@@ -444,11 +444,8 @@ _BM25_FAILURE_REPORTED = False
 
 
 def bm25_hits(question, floor, keep, found=None, root=None):
-    """BM25 RECALL, the sibling of identifier recall (tools/byxin_bm25.py; HORIZON_SCAN_2026-10 §8 item 1).
-    Called only when the tunable BM25_KEEP is above 0. The top `keep` BM25 chunks whose file is not already
-    among the hits (`found`, keyed by _norm) join at the floor plus a hair, explained as lexical and naming the
-    terms they matched, so a reader can tell them from an embedding match. Not a rank fusion: the floor is
-    applied to adjusted similarity and a fused rank has none (the why is in byxin_bm25's docstring)."""
+    """
+    """
     if keep <= 0:
         return []
     found = {} if found is None else found

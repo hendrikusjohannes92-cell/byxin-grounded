@@ -11,7 +11,7 @@
   SessionEnd        end event, sync
 SPDX-License-Identifier: BSD-2-Clause
 """
-import json, os, sys
+import json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -34,9 +34,41 @@ def _save(B, st):
     os.replace(_state_path(B) + ".tmp", _state_path(B))
 
 
-def _context(event, text):
+#: the mod's own question test (hooks/register.tsx QUESTION), kept equal by test_the_web_hooks_ask_like_the_mod
+QUESTION = re.compile(r"\?\s*$|^\s*(what|why|how|where|when|who|which|is|are|does|do|did|can|could|explain|describe|tell me)\b",
+                      re.I)
+
+
+def _context(event, text, shown=""):
+    """The context the model reads, and the line the person sees: the )|( sigil when ByxIn acted on the turn."""
+    out = {}
     if text:
-        sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}))
+        out["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": text}
+    if shown:
+        out["systemMessage"] = ")|( ByxIn: " + shown
+    if out:
+        sys.stdout.write(json.dumps(out))
+
+
+def _last_answer(path):
+    """The last assistant text of the turn, from the session transcript (one JSON object per line)."""
+    texts = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if m.get("type") == "user" and not isinstance((m.get("message") or {}).get("content"), list):
+                    texts = []                     # a person's new prompt starts a new turn
+                elif m.get("type") == "assistant":
+                    for c in (m.get("message") or {}).get("content") or []:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            texts.append(c.get("text") or "")
+    except OSError:
+        return ""
+    return "\n".join(t for t in texts if t).strip()
 
 
 def main():
@@ -65,23 +97,46 @@ def main():
         st["ask"], st["turn_files"] = ("" if st["trigger"] else prompt[:600]), []
         out = B.beat(dict(a, files=st["files"], since=st.get("heard")), H)
         st["heard"] = out.get("at") or st.get("heard")
+        st["prep"] = None
+        parts, shown = [out.get("news") or ""], "shared brain: news from the other sessions" if out.get("news") else ""
+        if st["ask"] and QUESTION.search(prompt) and not prompt.startswith("/"):
+            prep = B.prepare(dict(a, question=prompt), H)
+            if prep.get("answerable"):
+                parts.append(prep.get("system") or "")
+                shown = "grounding · %d passages · %d lessons" % (prep.get("chunks") or 0, len(prep.get("lessons") or []))
+                st["prep"] = {"state": prep.get("state"), "chunks": prep.get("chunks"), "lessons": prep.get("lessons")}
+            elif prep.get("anchored"):
+                parts.append("ByxIn retrieved nothing from the record for this question, which names something that "
+                             "should be there. Answer exactly that you cannot see it in the record and stop; do not fill "
+                             "the gap from general knowledge, and do not invent a file, number or citation.")
+                shown = "grounding · the record lacks what this names"
         _save(B, st)
-        _context("UserPromptSubmit", out.get("news") or "")
+        _context("UserPromptSubmit", "\n\n".join(x for x in parts if x), shown)
     elif event == "PostToolUse":
         ti = h.get("tool_input") or {}
         p = ti.get("file_path") or ti.get("notebook_path")
-        if p:
-            p = os.path.relpath(p, cwd).replace("\\", "/") if os.path.isabs(p) else p
+        try:
+            p = (os.path.relpath(p, cwd) if os.path.isabs(p) else p).replace("\\", "/") if p else None
+        except ValueError:
+            p = None                                   # another drive: not in the project
+        if p and B._in_project(p):                     # a scratchpad or another repository is not this project's
             st["turn_files"] = sorted(set(st.get("turn_files") or []) | {p})
             st["files"] = sorted(set(st.get("files") or []) | {p})
             _save(B, st)
     elif event == "Stop":
         # a turn no one asked is recorded only for what it edited, and says what started it
+        outcome, answer, shown = None, _last_answer(h.get("transcript_path") or ""), ""
+        if st.get("prep") and answer:
+            chk = B.check({"answer": answer, "question": st.get("ask") or "", "state": st["prep"]["state"]}, H)
+            verified = bool((chk.get("attribution") or {}).get("verified"))
+            outcome = "verified" if verified else "unverified"
+            shown = "%s · %d passages" % ("verified" if verified else "UNVERIFIED", st["prep"].get("chunks") or 0)
         if st.get("ask") or (st.get("trigger") and st.get("turn_files")):
-            B.turn(dict(a, ask=st.get("ask") or "", files=st.get("turn_files") or [], answer="",
-                        trigger=st.get("trigger") or None), H)
-        st["ask"], st["turn_files"], st["trigger"] = "", [], ""
+            B.turn(dict(a, ask=st.get("ask") or "", files=st.get("turn_files") or [], answer=answer[:600],
+                        outcome=outcome, trigger=st.get("trigger") or None), H)
+        st["ask"], st["turn_files"], st["trigger"], st["prep"] = "", [], "", None
         _save(B, st)
+        _context("Stop", "", shown)
     elif event == "SessionEnd":
         B.end(dict(a, files=st.get("files") or []), H)
     return 0

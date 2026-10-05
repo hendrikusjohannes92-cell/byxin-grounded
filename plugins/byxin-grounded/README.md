@@ -1,6 +1,6 @@
 # byxin-grounded
 
-ByxIn's brain inside Claude Code. Version 0.5.1.
+ByxIn's brain inside Claude Code. Version 0.5.2.
 
 Claude Code answers from what it can see. byxin-grounded puts a small, honest brain beside it:
 

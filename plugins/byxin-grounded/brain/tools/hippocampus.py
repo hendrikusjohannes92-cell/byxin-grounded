@@ -279,10 +279,6 @@ def ingest_episode(
 ) -> Optional[int]:
     """Insert one episode. Returns row id or None on dedupe conflict.
 
-    SURPRISE GATE, off unless BYXIN_SURPRISE_GATE=1. ByxIn proposed it (ideas ledger #25) from the Titans note
-    in its own corpus, which has said since 2026-05-28 that "only novel/surprising events should be written,
-    routine events should be skipped" and named this module as where it belongs. Measured 2026-09-30, four
-    months later: 71926 episodes, 1344 distinct intents, and "execute imu node" recorded 6103 times.
 
     With the gate on, a routine repeat increments a count in the episode_strength side table instead of adding
     a row -- the `episodes` schema is untouched, so every existing reader is unaffected. A novel intent, a

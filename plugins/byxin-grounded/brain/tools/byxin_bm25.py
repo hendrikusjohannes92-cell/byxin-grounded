@@ -18,6 +18,19 @@ WHAT IS HERE.
   * query(question, k=5, root=None) -> [{"source", "content", "score", "terms"}], and [] for a question whose
     terms occur nowhere -- the green must be able to go red.
 
+WHAT IS NOT HERE, ON PURPOSE.
+  * No reciprocal-rank fusion of the BM25 order with the embedding order. byxin_rerank.retrieve() applies the
+    floor (rag.min_confidence, MEASURED, not chosen) to the ADJUSTED SIMILARITY of every hit, and a fused rank
+    has no similarity to hold under a floor: fusing would either bypass the floor or invent a similarity. §8
+    names RRF with k ~ 60; a later change may add it behind its own tunable once that question is settled by
+    measurement. Here a BM25 hit joins exactly the way an identifier hit joins: at the floor plus a hair,
+    explained as lexical, in the reserved lexical room -- and only when the tunable BM25_KEEP
+    (byxin_rerank.TUNABLES, default 0, so nothing changes until a trainer or the user moves it) says so.
+  * No stop list. A query term that occurs in more than half of the chunks is dropped at query time, which is
+    what a stop list is for, derived from the corpus instead of maintained by hand.
+  * No stemming. An exact token is the point.
+  * Nothing under school/ or tools/bench_runs/, whatever the watch list says: those are exam papers (the
+    2026-09-30 lesson), and a wider lexical net over them would be the same leak by another door (§8a).
 
 """
 import argparse

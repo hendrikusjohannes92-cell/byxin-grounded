@@ -23,7 +23,7 @@
   },
   "skill_library": {
     "enabled": true,
-    "persist_dir": "data/hive/skills",
+    "persist_dir": "data/skills",
     "min_retrieval_confidence": 0.8,
     "min_store_confidence": 0.65,
     "max_skills": 10000,

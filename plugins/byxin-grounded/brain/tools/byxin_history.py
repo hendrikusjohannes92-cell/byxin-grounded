@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """byxin_history.py -- are we actually writing history? Measured, and made true.
 
-JAN ASKED, 2026-09-30: "Are we actually writing history?" Measured before answering: the hippocampus received
+THE USER ASKED, 2026-09-30: "Are we actually writing history?" Measured before answering: the hippocampus received
 93 episodes that day, and nearly every one was the hourly pulse -- "status voice node", "status camera node",
 "status motor node", "execute imu node", four rows an hour, source unknown. Not one of the bench questions asked
 that day, not one lesson taught, not one idea proposed or refused, was an episode. The old exchange log
