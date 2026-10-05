@@ -500,3 +500,19 @@ def test_a_mirrored_mailbox_is_named_as_a_mailbox_not_a_session(world):
         json.dump(ev, fh)
     text = bridge("resume", world["wt"], "s2-local")["text"]
     assert "mailbox team-mailbox on laptop" in text and "session team-mai" not in text, text
+
+
+def test_a_session_without_the_send_tool_answers_mail_by_command(world):
+    """The engine may not list the plugin's send tool to the model: brain/send.py sends the same mail by command, one
+    level deeper when it names the mail it answers, and says plainly when it could not send."""
+    first = bridge("send", world["a"], "s1-local", to="s2-local", text="can you look at the parser?", by="person")
+    send = os.path.join(os.path.dirname(BRIDGE), "send.py")
+    run = lambda *args: subprocess.run([sys.executable, send, *args], capture_output=True, text=True, encoding="utf-8",
+                                       creationflags=NO_WINDOW, timeout=180,
+                                       env=dict(os.environ, BYXIN_RPC_PORT="9", BYXIN_HOST="laptop", PYTHONIOENCODING="utf-8"))
+    ok = run("--session", "s2-local", "--root", str(world["wt"]), "--to", "s1-local", "--reply-to", first["event"], "yes, after lunch")
+    assert ok.returncode == 0 and ok.stdout.startswith("sent to s1-local"), (ok.stdout, ok.stderr)
+    got = [m for m in bridge("beat", world["a"], "s1-local", mail_recent=True)["mail"] if m["text"] == "yes, after lunch"]
+    assert len(got) == 1 and got[0]["depth"] == 1, got
+    bad = run("--session", "s2-local", "--root", str(world["wt"]), "--to", "", "nothing")
+    assert bad.returncode == 1 and bad.stdout.startswith("not sent"), (bad.stdout, bad.stderr)

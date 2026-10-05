@@ -1,6 +1,6 @@
 # byxin-grounded
 
-ByxIn's brain inside Claude Code. Version 0.9.1.
+ByxIn's brain inside Claude Code. Version 1.0.0.
 
 Claude Code answers from what it can see. byxin-grounded puts a small, honest brain beside it, for anyone, in any
 repository:
@@ -53,9 +53,10 @@ session in a new project says in one line what ByxIn does and how to turn it off
 | `/byxin share on` | share the brain through the repository, so sessions on other machines and the web join |
 | `/byxin where` · `/byxin ask <question>` | which brain serves this project · what ByxIn would show the model for a question |
 
-The model gets one tool, `send`, to mail another session itself (to hand over work or warn about a file you are both
-changing). Claude Code's own session messaging reaches live sessions on one machine; ByxIn mail also reaches sessions
-on other machines and on the web, and stays in the project's record.
+The model can mail another session itself (to hand over work or warn about a file you are both changing): through
+the plugin's `send` tool where Claude Code lists plugin-registered tools to the model, and otherwise by the command
+`brain/send.py`, which a woken mail spells out in full. Claude Code's own session messaging reaches live sessions on
+one machine; ByxIn mail also reaches sessions on other machines and on the web, and stays in the project's record.
 
 Mail cannot keep sessions busy with no person in the loop: a mail wakes its recipient, the answer wakes the sender, and
 a reply to that answer is shown but starts no turn. Mail to `all` is shown to every session and wakes none, and no
