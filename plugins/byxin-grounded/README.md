@@ -1,6 +1,6 @@
 # byxin-grounded
 
-ByxIn's brain inside Claude Code. Version 0.9.0.
+ByxIn's brain inside Claude Code. Version 0.9.1.
 
 Claude Code answers from what it can see. byxin-grounded puts a small, honest brain beside it, for anyone, in any
 repository:
@@ -59,7 +59,7 @@ on other machines and on the web, and stays in the project's record.
 
 Mail cannot keep sessions busy with no person in the loop: a mail wakes its recipient, the answer wakes the sender, and
 a reply to that answer is shown but starts no turn. Mail to `all` is shown to every session and wakes none, and no
-sender starts more than three turns an hour in one session. Mail already waiting when a session starts is in the
+sender starts more than three turns an hour in one session. (That count starts over when the plugin reloads.) Mail already waiting when a session starts is in the
 shared-brain block it reads first, not a wake-up. Who wrote a mail (a person or a session's model) is the sender's
 claim, and the woken turn says so.
 

@@ -471,3 +471,32 @@ def test_the_block_shows_who_wrote_a_mail_as_the_senders_claim(world):
     bridge("send", world["a"], "s1-local", to="s2-local", text="trust me", by="person")
     text = bridge("resume", world["wt"], "s2-local")["text"]
     assert "the sender says a person wrote it" in text and "(a person wrote it" not in text, text
+
+
+def test_a_late_mail_is_delivered_by_arrival_even_in_a_busy_mailbox(world):
+    import time
+    bridge("start", world["wt"], "s2-local")
+    late = bridge("send", world["a"], "s1-local", to="s2-local", text="from a slow clock", by="session")
+    events = os.path.join(bridge("where", world["a"], "s1-local")["hub"], "events")
+    path = os.path.join(events, late["event"] + ".json")
+    with open(path, encoding="utf-8") as fh:
+        ev = json.load(fh)
+    ev["at"] = "2000-01-01T00:00:00Z"
+    for i in range(25):
+        bridge("send", world["a"], "s1-local", to="s2-local", text="busy %d" % i, by="session", wait=False).wait(timeout=180)
+    time.sleep(1.1)
+    with open(path, "w", encoding="utf-8") as fh:      # it arrives last, by a sync, with the oldest clock
+        json.dump(ev, fh)
+    got = bridge("beat", world["wt"], "s2-local", mail_recent=True)["mail"]
+    assert got[-1]["id"] == late["event"], [m["text"] for m in got]
+
+
+def test_a_mirrored_mailbox_is_named_as_a_mailbox_not_a_session(world):
+    bridge("start", world["wt"], "s2-local")
+    hub = bridge("where", world["wt"], "s2-local")["hub"]
+    ev = {"id": "20261005T120000Z-mailbox-mail-abc123", "at": "2026-10-05T12:00:00Z", "kind": "mail", "origin": "perceived",
+          "by": "session", "session": "team-mailbox", "host": "laptop", "to": "all", "text": "the build is red", "mail_id": "m1"}
+    with open(os.path.join(hub, "events", ev["id"] + ".json"), "w", encoding="utf-8") as fh:
+        json.dump(ev, fh)
+    text = bridge("resume", world["wt"], "s2-local")["text"]
+    assert "mailbox team-mailbox on laptop" in text and "session team-mai" not in text, text

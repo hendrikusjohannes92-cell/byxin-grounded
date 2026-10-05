@@ -602,7 +602,8 @@ def _for_me(e, my_name=None):
 
 
 def _mail_line(e):
-    who = "session %s on %s" % ((e.get("session") or "?")[:8], e.get("host"))
+    # a mail a project's own mailbox mirrored in names a mailbox, not a session of this mod
+    who = ("mailbox %s on %s" if e.get("mail_id") else "session %.8s on %s") % (e.get("session") or "?", e.get("host"))
     # who wrote it is the sender's claim: the record cannot check it
     how = "the sender says a person wrote it" if e.get("origin") == "told" else "its model wrote it"
     return "  - mail from %s (%s, %s): %s" % (who, how, _ago(e.get("at")), e.get("text"))
@@ -618,9 +619,18 @@ def _mail_out(e):
             "told": e.get("origin") == "told", "to": e.get("to"), "depth": int(e.get("depth") or 0)}
 
 
+def _arrived(e):
+    """When the mail reached this machine (its file's time: a sync writes it on arrival), not the sender's clock."""
+    try:
+        return os.path.getmtime(os.path.join(_dir("events"), e["id"] + ".json"))
+    except OSError:
+        return _epoch(e.get("at"))
+
+
 def recent_mail(n=MAIL_N):
-    """This session's newest mail, by id: a mail that arrives late by a sync, with an older clock, is still in it."""
-    return [_mail_out(e) for e in sorted(mail_for_me(), key=lambda e: e.get("at") or "")[-n:]]
+    """This session's newest mail by arrival: a mail that comes late by a sync, with an older clock, is still in it,
+    however busy the mailbox."""
+    return [_mail_out(e) for e in sorted(mail_for_me(), key=_arrived)[-n:]]
 
 
 def news_text(since):
