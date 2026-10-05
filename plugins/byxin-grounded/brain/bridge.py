@@ -584,6 +584,35 @@ def _cap(lines, cap):
     return "\n".join(out)
 
 
+def names():
+    """session id -> the name it was last given (/byxin name), from the record, so another machine knows it too."""
+    out = {}
+    for e in events():
+        if e.get("kind") == "name" and e.get("name"):
+            out[e.get("session")] = e["name"]
+    return out
+
+
+def _for_me(e, my_name=None):
+    """Mail addressed to this session (its id, a prefix of it, or its name) or to all, from another session."""
+    me, to = CTX.get("session") or "", (e.get("to") or "").strip()
+    if my_name is None:
+        my_name = names().get(me)
+    return e.get("kind") == "mail" and e.get("session") != me and bool(to) and (
+        to == "all" or me.startswith(to) or (bool(my_name) and to.lower() == my_name.lower()))
+
+
+def _mail_line(e):
+    who = "session %s on %s" % ((e.get("session") or "?")[:8], e.get("host"))
+    how = "a person wrote it" if e.get("origin") == "told" else "its model wrote it"
+    return "  - mail from %s (%s, %s): %s" % (who, how, _ago(e.get("at")), e.get("text"))
+
+
+def mail_for_me(since=None):
+    mine = names().get(CTX.get("session") or "")
+    return [e for e in events() if _for_me(e, mine) and (not since or (e.get("at") or "") > since)]
+
+
 def news_text(since):
     """What changed since this session last heard: sessions that started or ended, turns that asked or edited, notes,
     corrections. A turn no one asked that edited nothing is not news."""
@@ -599,6 +628,8 @@ def news_text(since):
             lines.append("  - %s: ended" % who)
         elif kind == "note":
             lines.append("  - note left for every session (told): %s (%s)" % (e.get("text"), who))
+        elif kind == "mail" and _for_me(e):
+            lines.append(_mail_line(e))
         elif kind == "retract":
             lines.append("  - correction: %s was wrong: %s (%s)" % (e.get("retracts"), e.get("why") or "no reason given", who))
         elif kind == "turn" and _asked(e):
@@ -634,7 +665,7 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
     notes = [e for e in evs if e.get("kind") == "note"][-limit_notes:]
     by_session = {}
     for e in evs:
-        if e.get("session") == me or e.get("kind") in ("note", "retract"):
+        if e.get("session") == me or e.get("kind") in ("note", "retract", "mail"):
             continue
         by_session.setdefault(e.get("session"), []).append(e)
     live = {s["session"]: s for s in live_sessions()}
@@ -642,7 +673,7 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
     recent, older = ordered[:limit_sessions], ordered[limit_sessions:]
     open_threads = [e for e in evs if e.get("kind") == "turn" and e.get("outcome") == "unverified" and e.get("id") not in retracted
                     and _asked(e) and time.time() - _epoch(e.get("at")) < 2 * 86400][-5:]
-    if not notes and not recent and not retracted:
+    if not notes and not recent and not retracted and not any(_for_me(e) for e in evs):
         return ""
     lines = ["BYXIN SHARED BRAIN -- what the other Claude Code sessions in this project did, as this mod recorded it while "
              "it happened (perceived), and notes people left for every session (told). It is a record of those "
@@ -655,6 +686,11 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
             lines.append("  - session %s on %s (%s), branch %s, last seen %s%s" % (
                 (s.get("session") or "?")[:8], s.get("host"), s.get("where"), s.get("branch") or "?", _ago(s.get("at")),
                 "; editing " + ", ".join(editing[:8]) if editing else ""))
+    mail = [e for e in evs if _for_me(e) and time.time() - _epoch(e.get("at")) < 2 * 86400][-5:]
+    if mail:
+        lines.append("")
+        lines.append("Mail for this session (from the other sessions, through the shared brain):")
+        lines.extend(_mail_line(e) for e in mail)
     if notes:
         lines.append("")
         lines.append("Notes left for every session (told):")
@@ -666,8 +702,10 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
         files = sorted({f for e in turns for f in _project_files(e.get("files"))})
         ended = any(e.get("kind") == "end" for e in es)
         lines.append("")
-        lines.append("Session %s on %s, branch %s, %s %s:" % ((sid or "?")[:8], es[-1].get("host"), es[-1].get("branch") or "?",
-                                                               "ended" if ended else "last active", _ago(es[-1].get("at"))))
+        named = names().get(sid)
+        lines.append("Session %s%s on %s, branch %s, %s %s:" % ((sid or "?")[:8], " (%s)" % named if named else "",
+                                                                 es[-1].get("host"), es[-1].get("branch") or "?",
+                                                                 "ended" if ended else "last active", _ago(es[-1].get("at"))))
         # a turn no one asked (a notification, a peer, a schedule) is shown only for what it edited
         shown = [t for t in turns if _asked(t) or _project_files(t.get("files"))]
         quiet = [t for t in turns if not _asked(t) and not _project_files(t.get("files"))]
@@ -830,6 +868,9 @@ def beat(a, H):
     beat_file(a.get("files"))
     s = sync() if share_config() and _last_sync_due() else None
     return {"ok": True, "live": live_sessions(), "news": resume_text(since=a.get("since")) if a.get("since") else "",
+            "mail": [{"id": e["id"], "from": e.get("session"), "host": e.get("host"), "text": e.get("text"),
+                      "at": e.get("at"), "told": e.get("origin") == "told"} for e in mail_for_me(a.get("mail_since"))]
+            if a.get("mail_since") else [],
             "sync": s, "at": _now()}
 
 
@@ -860,6 +901,35 @@ def note(a, H):
     stored = _record(text, "noted", "told", "note", operator="person via " + _operator())
     s = sync() if share_config() else None
     return {"ok": True, "event": ev["id"], "stored": stored, "sync": s}
+
+
+def send(a, H):
+    """Mail to one session (its id, or the 8 characters the block shows) or to all. A person's /byxin send is told; a
+    session's model sending it through the tool is perceived -- the record says which."""
+    to, text = (a.get("to") or "").strip(), (a.get("text") or "").strip()
+    if not to or not text:
+        return {"ok": False, "error": "mail needs an address and words: /byxin send <session|all> <text>"}
+    told = a.get("by") == "person"
+    ev = write_event("mail", origin="told" if told else "perceived", by="person" if told else "session", to=to[:80],
+                     text=text[:2000])
+    s = sync() if share_config() else None
+    return {"ok": True, "event": ev["id"], "to": to, "sync": s}
+
+
+def name(a, H):
+    """Give this session a name other sessions can mail it by (and that the block shows): /byxin name <name>."""
+    n = (a.get("name") or "").strip()
+    if not n or n.lower() == "all" or len(n) > 60:
+        return {"ok": False, "error": "a session name is a word or two, and not 'all': /byxin name <name>"}
+    ev = write_event("name", origin="told", by="person", name=n)
+    s = sync() if share_config() else None
+    return {"ok": True, "event": ev["id"], "name": n, "sync": s}
+
+
+def mail(a, H):
+    s = sync() if share_config() else None
+    return {"ok": True, "mail": [{"id": e["id"], "from": e.get("session"), "host": e.get("host"), "text": e.get("text"),
+                                  "at": e.get("at"), "told": e.get("origin") == "told"} for e in mail_for_me()], "sync": s}
 
 
 def notes(a, H):
@@ -929,7 +999,7 @@ def share(a, H):
 
 OPS = {"prepare": prepare, "check": check, "remember": remember, "lessons": lessons,
        "where": where, "start": start, "beat": beat, "turn": turn, "note": note, "notes": notes, "resume": resume,
-       "end": end, "share": share, "retract": retract, "events": events_list}
+       "end": end, "share": share, "retract": retract, "events": events_list, "send": send, "mail": mail, "name": name}
 
 if __name__ == "__main__":
     try:

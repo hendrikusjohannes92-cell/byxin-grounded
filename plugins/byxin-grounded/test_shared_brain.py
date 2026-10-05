@@ -348,3 +348,53 @@ def test_the_first_session_in_a_project_is_told_what_byxin_is_and_no_later_one(w
     assert bridge("start", world["a"], "first-one")["first"] is True, "a session's own restart is still the first"
     bridge("turn", world["a"], "first-one", ask="what is here?", answer="a parser")
     assert bridge("start", world["wt"], "second-one")["first"] is False
+
+
+# Roadmap item 8: mail between sessions lives in the shared brain, addressed to one session or to all.
+
+def test_mail_reaches_the_session_it_is_for_and_no_other(world):
+    import time
+    t0 = bridge("start", world["wt"], "s2-local")["at"]
+    bridge("start", world["a"], "s3-other")
+    time.sleep(1.2)
+    sent = bridge("send", world["a"], "s1-local", to="s2-local", text="please rebase onto main before landing", by="person")
+    assert sent["event"], sent
+    for_s2 = bridge("beat", world["wt"], "s2-local", since=t0, mail_since=t0)
+    assert [m["text"] for m in for_s2["mail"]] == ["please rebase onto main before landing"], for_s2["mail"]
+    assert "please rebase onto main" in for_s2["news"], for_s2["news"]
+    for_s3 = bridge("beat", world["a"], "s3-other", since=t0, mail_since=t0)
+    assert for_s3["mail"] == [] and "please rebase" not in for_s3["news"], for_s3
+    assert [m["text"] for m in bridge("mail", world["wt"], "s2-local")["mail"]] == ["please rebase onto main before landing"]
+
+
+def test_mail_to_all_reaches_every_other_session_and_is_never_shown_as_asked(world):
+    import time
+    t0 = bridge("start", world["wt"], "s2-local")["at"]
+    time.sleep(1.2)
+    bridge("send", world["a"], "s1-local", to="all", text="the release is frozen until Friday", by="session")
+    got = bridge("beat", world["wt"], "s2-local", since=t0, mail_since=t0)
+    assert [m["text"] for m in got["mail"]] == ["the release is frozen until Friday"], got["mail"]
+    assert "asked:" not in got["news"], got["news"]
+    mine = bridge("beat", world["a"], "s1-local", since=t0, mail_since=t0)["mail"]
+    assert mine == [], "a session does not receive its own mail"
+
+
+def test_mail_crosses_machines_through_the_shared_branch(world):
+    t0 = bridge("start", world["b"], "s4-cloud", host="cloud-box")["at"]
+    bridge("send", world["a"], "s1-local", to="s4-cloud", text="your branch is behind main", by="person")
+    got = bridge("resume", world["b"], "s4-cloud", host="cloud-box")
+    assert "your branch is behind main" in got["text"], got["text"]
+    assert [m["text"] for m in bridge("mail", world["b"], "s4-cloud", host="cloud-box")["mail"]] == ["your branch is behind main"]
+
+
+def test_a_named_session_gets_the_mail_sent_to_its_name(world):
+    import time
+    t0 = bridge("start", world["wt"], "f00dcafe-session", host="laptop")["at"]
+    bridge("name", world["wt"], "f00dcafe-session", name="reviewer")
+    time.sleep(1.2)
+    bridge("send", world["a"], "s1-local", to="reviewer", text="the parser change is ready for review", by="person")
+    got = bridge("beat", world["wt"], "f00dcafe-session", since=t0, mail_since=t0)
+    assert [m["text"] for m in got["mail"]] == ["the parser change is ready for review"], got
+    other = bridge("beat", world["a"], "s9-other", since=t0, mail_since=t0)
+    assert other["mail"] == [], other
+    assert "reviewer" in bridge("start", world["a"], "s8-reader")["text"], "the block shows a session's name"

@@ -52,6 +52,10 @@ const words = (s: string): string[] => s.trim().split(/\s+/).filter(Boolean)
 // THE SIGIL: the person sees when ByxIn is active. It marks a turn a layer acted on -- facts or a refusal injected, the comparator's verdict, news from the other sessions -- and never
 // a prompt passed through untouched, so the sigil claims no more than happened.
 const SIGIL = ')|('
+const SEND_DESC = 'Send a message to another Claude Code session working in this project, or to all of them, through ' +
+  "ByxIn's shared brain. An idle recipient receives it at once as a new turn; a busy one when it finishes. Address a " +
+  'session by the 8-character id the shared-brain block shows, or "all". Use it to hand over work, warn about a file ' +
+  'you are both changing, or answer a message you received.'
 const HELP_HEAD = 'ByxIn grounded: answers grounded in this project\'s own files and checked against what was shown, and one shared brain for every session here.'
 // FIRST SESSION. A project where no session has worked yet hears once what ByxIn does and how to turn it off.
 const WELCOME = `${SIGIL} ByxIn grounded is on in this project: it grounds answers in the project's files and shares what each session does with the others. /byxin help · /byxin off`
@@ -85,6 +89,10 @@ let news = ''
 // asks for everything since heardAt, so news waits whole until a prompt shows it; nothing is lost between beats.
 let heardAt = ''
 let newsAt = ''
+// MAIL. mailAt: how far this session's mail has been delivered; sendTool: the model's send tool, once registered.
+let mailAt = ''
+let sendTool = ''
+let sendToolError = ''
 let lastBeat = 0
 const alerts: string[] = []
 const warned = new Set<string>()
@@ -141,11 +149,20 @@ async function findPython($: Api): Promise<string[] | null> {
 
 async function heartbeat($: Api): Promise<void> {
   lastBeat = Date.now()
-  const r = await run($, 'beat', { files: [...sessionEdits], since: heardAt }, 90000)
+  const r = await run($, 'beat', { files: [...sessionEdits], since: heardAt, mail_since: mailAt }, 90000)
   if (!r.ok) return
   live = (r.live as Live[] | undefined) ?? []
   if (typeof r.news === 'string') news = r.news
   if (typeof r.at === 'string') newsAt = r.at
+  // THE ACTIVE TRIGGER: each new mail becomes a turn of this session -- at once when it is idle, after the turn it is
+  // in otherwise (a plugin's prompt waits for idle). It arrives as the plugin's message, never as the person's words.
+  const mail = (r.mail as { from: string; host: string; text: string; told: boolean }[] | undefined) ?? []
+  if (mail.length && typeof r.at === 'string') mailAt = r.at
+  for (const m of mail) {
+    const from = String(m.from ?? '?').slice(0, 8)
+    $.ui.toast(`${SIGIL} ByxIn: mail from session ${from}`)
+    void $.prompt.submit({ text: `Mail through ByxIn from session ${from} on ${m.host} (${m.told ? 'a person wrote it' : 'its model wrote it'}):\n\n${m.text}\n\nTo answer, use the ByxIn send tool with to: "${from}".` })
+  }
 }
 
 export const register: Register = on => {
@@ -153,6 +170,15 @@ export const register: Register = on => {
     cwd = e.cwd
     await $.command.register({ name: 'byxin', description: 'ByxIn: ask | on | off | always | ledger | brain | note | notes | events | retract | sessions | share | where | engine | ' + Object.keys(TOOLS).join(' | ') })
     $.ui.status('ByxIn: starting')
+    // the model's send tool is registered before the first turn: a tool registered later is listed only from the next
+    try {
+      sendTool = (await $.tool.register({
+        name: 'send', description: SEND_DESC,
+        inputSchema: { type: 'object', required: ['to', 'text'], properties: {
+          to: { type: 'string', description: 'the recipient session id (8 characters) or "all"' },
+          text: { type: 'string', description: 'the message' } } },
+      })).tool
+    } catch (err) { sendTool = ''; sendToolError = String(err) }
     // The start runs beside the session; the first prompt waits for it, so the shared brain is in front of the model
     // before it answers (a headless run submits its prompt at once).
     ready = (async () => {
@@ -176,6 +202,7 @@ export const register: Register = on => {
         resumeText = String(st.text ?? '')
         live = (st.live as Live[] | undefined) ?? []
         heardAt = String(st.at ?? '')
+        mailAt = heardAt
         if (st.first === true) $.ui.toast(WELCOME)
       }
       $.ui.status(`ByxIn: ready (${mode}) · ${where.vendored ? 'vendored brain' : "the project's own brain"}${live.length ? ` · ${live.length} other session(s) working here` : ''}`)
@@ -251,6 +278,11 @@ export const register: Register = on => {
 
   // THE EVIDENCE and THE EDITS: what the session reads is shown to the comparator; what it edits is told to the others.
   on('tool.call', async ($, e, next) => {
+    if (sendTool !== '' && e.tool === sendTool) {
+      const m = e as unknown as { to?: string; text?: string }
+      const r = await run($, 'send', { to: m.to ?? '', text: m.text ?? '', by: 'session' }, 60000)
+      return { result: r.ok ? `sent to ${String(r.to)} through ByxIn's shared brain` : `not sent: ${String(r.error)}` }
+    }
     const ran = await next(e)
     const denied = 'deny' in ran && ran.deny !== undefined
     // An edit counts only when it happened: a write held for permission comes back as an errored result, not a deny,
@@ -333,6 +365,7 @@ export const register: Register = on => {
       return { text: `ByxIn layers: ${mode === 'questions' ? 'on for questions' : mode === 'always' ? 'on for every prompt' : 'off'}.` }
     }
     if (sub === 'where') {
+      if (rest[0] === 'tool') return { text: `send tool: ${sendTool || '(none)'} ${sendToolError}` }
       return { text: where === null ? 'ByxIn has not started (no Python 3, or the bridge failed).' : [
         `brain   ${where.tree}  (${where.tree_why})`, `record  ${where.record}`, `shared  ${where.hub}`,
         `beyond this machine: ${where.shared ? JSON.stringify(where.shared) : 'no (/byxin share on to share through the repository)'}`,
@@ -384,6 +417,22 @@ export const register: Register = on => {
       const p = r as unknown as Prepared
       return { text: p.answerable ? `ByxIn would show the model ${p.chunks} chunks from ${p.sources.join(', ') || '(none)'}; lessons fired: ${p.lessons.join(', ') || 'none'}.${p.retrieval_note ? '\n(' + p.retrieval_note + ')' : ''}` : `ByxIn: the record holds nothing for that. ${p.retrieval_note ?? ''}` }
     }
+    if (sub === 'send') {
+      const [to = '', ...words_] = rest
+      const r = await run($, 'send', { to, text: words_.join(' '), by: 'person' }, 60000)
+      return { text: r.ok ? `${SIGIL} ByxIn: sent to ${to}.` : 'ByxIn: ' + String(r.error) }
+    }
+    if (sub === 'name') {
+      const r = await run($, 'name', { name: rest.join(' ') }, 60000)
+      return { text: r.ok ? `${SIGIL} ByxIn: this session is now "${String(r.name)}"; mail sent to that name reaches it.` : 'ByxIn: ' + String(r.error) }
+    }
+    if (sub === 'mail') {
+      const r = await run($, 'mail', {}, 60000)
+      if (!r.ok) return { text: 'ByxIn: ' + String(r.error) }
+      const list = (r.mail as { from: string; host: string; text: string; at: string }[]) ?? []
+      return { text: list.length ? list.map(m => `${m.at}  from ${String(m.from).slice(0, 8)} on ${m.host}: ${m.text}`).join('\n')
+        : 'No mail for this session.' }
+    }
     const tool = TOOLS[sub]
     if (tool === undefined) {
       return { text: [HELP_HEAD,
@@ -392,6 +441,9 @@ export const register: Register = on => {
         '  /byxin brain              what the other sessions of this project did and left',
         '  /byxin sessions           who is working here right now, and what they are editing',
         '  /byxin note <text>        leave a note every session here will read; /byxin notes lists them',
+        '  /byxin send <session|all> <text>   mail another session here; it wakes the session if it is idle',
+        '  /byxin mail               the mail sent to this session',
+        '  /byxin name <name>        give this session a name other sessions can mail it by',
         '  /byxin events [n]         the record of sessions; /byxin retract <event-id> <why> marks one wrong',
         '  /byxin share on|off|status|sync   share the brain with other machines through the repository',
         '  /byxin where              which brain, record and hub serve this project',
