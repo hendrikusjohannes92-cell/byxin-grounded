@@ -34,7 +34,7 @@ plugins, so the repository's `.claude/settings.json` runs `brain/classic_hook.py
 `CLAUDE_CODE_REMOTE` is `true` and exits at once elsewhere, so a local session with the mod never records a turn twice.
 Tested by `test_shared_brain.py`: two worktrees, a separate clone as the remote machine, a bare repository as the remote,
 concurrent pushes, the classic-hook path, and the red halves (a session alone hears nothing, no `share.json` sends
-nothing, a `never` remote is refused, classic hooks stay silent on a local machine).
+nothing, a `never` remote is refused, classic hooks stay silent in a local session).
 
 ## The C++ engine
 Not part of this release. Without it retrieval is lexical (identifier recall and BM25 with a coverage floor) and every other layer works; `/byxin engine up` says so.

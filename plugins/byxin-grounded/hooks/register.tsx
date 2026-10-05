@@ -161,6 +161,8 @@ async function heartbeat($: Api): Promise<void> {
   for (const m of mail) {
     const from = String(m.from ?? '?').slice(0, 8)
     $.ui.toast(`${SIGIL} ByxIn: mail from session ${from}`)
+    // /byxin off: the mail is kept and shown, but it starts no turn in this session
+    if (mode === 'off') continue
     void $.prompt.submit({ text: `Mail through ByxIn from session ${from} on ${m.host} (${m.told ? 'a person wrote it' : 'its model wrote it'}):\n\n${m.text}\n\nTo answer, use the ByxIn send tool with to: "${from}".` })
   }
 }
