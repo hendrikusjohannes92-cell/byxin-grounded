@@ -1,5 +1,10 @@
 """Grounding injects facts only when they cover the question (roadmap item 2).
 
+A question about the project in general must not be anchored by the project's own name -- a name the whole record
+is full of -- nor handed passages about the project in general with the instruction to answer only from them. Here a
+scratch project whose every page says "AcmeOS" stands in for any project: the project's own name
+neither anchors a question nor counts as covering it; a real term the record holds still does; a real identifier the
+record lacks still gets the honest "cannot see it". The bridge runs as the mod runs it, with no engine (lexical lanes).
 """
 import json, os, subprocess, sys
 import pytest

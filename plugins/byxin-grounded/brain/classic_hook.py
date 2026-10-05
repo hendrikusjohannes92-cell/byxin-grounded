@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """classic_hook.py -- the shared brain for a session that cannot load the mod: a Claude Code on the web session.
 
+A cloud session does not add the marketplaces a repository lists (that needs the workspace trust dialog, which a
+cloud session never shows), so the mod's function hooks never load there. Classic settings hooks do run there, from
+the repository's .claude/settings.json. This script is those hooks: it drives the same bridge the mod drives, so a
+cloud session reads what the local sessions did and writes what it did, through the shared branch.
 
+It acts only where the mod cannot: when CLAUDE_CODE_REMOTE is "true" (the cloud) or BYXIN_CLASSIC_HOOKS is "1". In a
+local session the mod is loaded and this exits at once, so no turn is recorded twice. It never blocks a session: any
+failure exits 0 with nothing on stdout.
 
   SessionStart      start event, sync, the shared-brain block as additional context
   UserPromptSubmit  remembers the ask (none for a prompt in an envelope: no one asked), beats, and passes on what
@@ -99,6 +106,8 @@ def main():
         st["heard"] = out.get("at") or st.get("heard")
         st["prep"] = None
         parts, shown = [out.get("news") or ""], "shared brain: news from the other sessions" if out.get("news") else ""
+        # THE GROUNDING, as in a local session: a question a person asked gets the facts the record covers, or the honest
+        # refusal when it names something the record lacks; anything else passes through untouched
         if st["ask"] and QUESTION.search(prompt) and not prompt.startswith("/"):
             prep = B.prepare(dict(a, question=prompt), H)
             if prep.get("answerable"):
@@ -127,6 +136,7 @@ def main():
         # a turn no one asked is recorded only for what it edited, and says what started it
         outcome, answer, shown = None, _last_answer(h.get("transcript_path") or ""), ""
         if st.get("prep") and answer:
+            # THE COMPARATOR, as in a local session; a web hook cannot annotate the answer, so the verdict is recorded and shown
             chk = B.check({"answer": answer, "question": st.get("ask") or "", "state": st["prep"]["state"]}, H)
             verified = bool((chk.get("attribution") or {}).get("verified"))
             outcome = "verified" if verified else "unverified"

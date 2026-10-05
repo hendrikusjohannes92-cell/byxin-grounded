@@ -27,9 +27,9 @@ type Live = { session: string; host: string; branch?: string; at: string; files:
 type Where = { tree: string; tree_why: string; hub: string; record: string; vendored: boolean; runtime: string; shared: unknown; host: string; branch: string }
 
 const QUESTION = /\?\s*$|^\s*(what|why|how|where|when|who|which|is|are|does|do|did|can|could|explain|describe|tell me)\b/i
-// NO ONE ASKED. Measured 2026-10-04: a session watching a long-running job recorded every monitor event as "asked:
-// <task-notification>", and the block every other session read was a wall of status lines (lesson
-// a-status-line-is-not-someone-asking). The engine says where a prompt came from; these origins are not a person, and a
+// NO ONE ASKED. A prompt a background task, a schedule, another session or a plugin sent is not a person asking
+// (lesson a-status-line-is-not-someone-asking): recorded as asks, a long-running job's notifications would fill the
+// block every other session reads. The engine says where a prompt came from; these origins are not a person, and a
 // prompt in one of these envelopes is not either. brain/bridge.py keeps the same envelopes for older records.
 const NOT_A_PERSON = new Set(['task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay',
   'coordinator', 'observer', 'observer-activity', 'plugin'])
@@ -49,10 +49,12 @@ const TOOLS: Record<string, { script: string; why: string }> = {
 }
 
 const words = (s: string): string[] => s.trim().split(/\s+/).filter(Boolean)
-// THE SIGIL, asked for 2026-10-05: "visual feedback from ByxIn grounded showing the )|( when it is active". It marks a turn
-// a layer acted on -- facts or a refusal injected, the comparator's verdict, news from the other sessions -- and never
+// THE SIGIL: the person sees when ByxIn is active. It marks a turn a layer acted on -- facts or a refusal injected, the comparator's verdict, news from the other sessions -- and never
 // a prompt passed through untouched, so the sigil claims no more than happened.
 const SIGIL = ')|('
+const HELP_HEAD = 'ByxIn grounded: answers grounded in this project\'s own files and checked against what was shown, and one shared brain for every session here.'
+// FIRST SESSION. A project where no session has worked yet hears once what ByxIn does and how to turn it off.
+const WELCOME = `${SIGIL} ByxIn grounded is on in this project: it grounds answers in the project's files and shares what each session does with the others. /byxin help · /byxin off`
 const sigil = (active: boolean, text: string): string => `${active ? SIGIL + ' ' : ''}ByxIn: ${text}`
 const tail = (s: string, n: number): string => (s.length > n ? '…' + s.slice(s.length - n) : s)
 
@@ -93,8 +95,8 @@ let served = 0
 let lastFailure = ''
 
 // A path inside the project, relative to the session's tree or the project's main tree; null for anything outside
-// (a scratchpad, a memory file, another repository). Measured 2026-10-05: those were shown to every session as
-// "editing", and they are none of this project's business.
+// (a scratchpad, a memory file, another repository): those are none of this project's business, and naming them would
+// tell every other session about files it cannot see.
 function rel(p: string): string | null {
   const n = p.replace(/\\/g, '/')
   for (const base of [root, project]) {
@@ -174,6 +176,7 @@ export const register: Register = on => {
         resumeText = String(st.text ?? '')
         live = (st.live as Live[] | undefined) ?? []
         heardAt = String(st.at ?? '')
+        if (st.first === true) $.ui.toast(WELCOME)
       }
       $.ui.status(`ByxIn: ready (${mode}) · ${where.vendored ? 'vendored brain' : "the project's own brain"}${live.length ? ` · ${live.length} other session(s) working here` : ''}`)
       $.clock.every(BEAT_MS, () => { void heartbeat($) })
@@ -250,8 +253,8 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
     const denied = 'deny' in ran && ran.deny !== undefined
-    // An edit counts only when it happened. Measured 2026-10-03, the first live session: a Write held for permission
-    // came back as an errored result, not a deny, and the turn recorded a file that was never written.
+    // An edit counts only when it happened: a write held for permission comes back as an errored result, not a deny,
+    // and must not be recorded as a file written.
     const failed = denied || (ran as { isError?: boolean }).isError === true
     if (!failed && EDIT_TOOLS.has(e.tool)) {
       const input = e as { file_path?: string; notebook_path?: string }
@@ -383,15 +386,17 @@ export const register: Register = on => {
     }
     const tool = TOOLS[sub]
     if (tool === undefined) {
-      return { text: ['ByxIn commands:',
-        '  ask <question> | on | off | always | ledger | where',
-        '  brain              what the other sessions of this project did and left (the shared brain)',
-        '  note <text>        leave a note every session in this project will read (told) | notes',
-        '  events [n] | retract <event-id> <why>   the record of sessions; mark one wrong, kept and marked',
-        '  sessions           who is working in this project right now, and what they are editing',
-        '  share on [remote] [branch] | off | status | sync   share the brain through the repository (a cloud session too)',
-        '  engine             not included in this build',
-        ...Object.entries(TOOLS).map(([k, t]) => `  ${k.padEnd(18)} ${t.why}`)].join('\n') }
+      return { text: [HELP_HEAD,
+        '  /byxin ask <question>     what ByxIn would give the model for this question, without asking it',
+        '  /byxin on | off | always  ground questions (the default) | do nothing | ground every prompt',
+        '  /byxin brain              what the other sessions of this project did and left',
+        '  /byxin sessions           who is working here right now, and what they are editing',
+        '  /byxin note <text>        leave a note every session here will read; /byxin notes lists them',
+        '  /byxin events [n]         the record of sessions; /byxin retract <event-id> <why> marks one wrong',
+        '  /byxin share on|off|status|sync   share the brain with other machines through the repository',
+        '  /byxin where              which brain, record and hub serve this project',
+        '  /byxin ledger             this session: questions grounded, answers flagged, files edited',
+        ...Object.entries(TOOLS).map(([k, t]) => `  /byxin ${k.padEnd(18)}${t.why}`)].join('\n') }
     }
     if (PY === null) return { text: 'ByxIn: no Python 3 on this machine (tried python3, python, py -3).' }
     let args = rest

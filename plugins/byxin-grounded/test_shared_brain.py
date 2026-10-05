@@ -22,7 +22,7 @@ def git(cwd, *args):
     return r.stdout
 
 
-def bridge(op, root, session, host="desk", wait=True, **kw):
+def bridge(op, root, session, host="laptop", wait=True, **kw):
     env = dict(os.environ, BYXIN_RPC_PORT="9", BYXIN_HOST=host, PYTHONIOENCODING="utf-8")
     env.pop("BYXIN_ROOT", None)
     env.pop("BYXIN_HUB", None)
@@ -48,7 +48,7 @@ def finish(p):
 def world(tmp_path):
     """A bare 'GitHub', a project pushed to it with sharing on, a second worktree of it, and a clone elsewhere."""
     remote = tmp_path / "remote.git"
-    git(tmp_path, "init", "--bare", "-q", str(remote))
+    git(tmp_path, "init", "--bare", "-q", "-b", "main", str(remote))
     a = tmp_path / "a"
     git(tmp_path, "init", "-q", "-b", "main", str(a))
     (a / "README.md").write_text("# a project\nThe parser lives in parse.py.\n", encoding="utf-8")
@@ -89,13 +89,13 @@ def test_a_session_alone_hears_nothing(world):
 
 def test_a_remote_session_joins_through_the_shared_branch_both_ways(world):
     bridge("start", world["a"], "s1-local")
-    bridge("note", world["a"], "s1-local", text="the laptop session owns parse.py today")
+    bridge("note", world["a"], "s1-local", text="the local session owns parse.py today")
     bridge("turn", world["a"], "s1-local", ask="why does the parser drop comments?", outcome="verified", files=[])
     branch = git(world["remote"], "ls-tree", "--name-only", "byxin-brain").split()
     assert len(branch) >= 3, branch
     got = bridge("start", world["b"], "s3-cloud", host="cloud-box")
     assert got["sync"]["pulled"] >= 3
-    assert "the laptop session owns parse.py today" in got["text"]
+    assert "the local session owns parse.py today" in got["text"]
     assert "why does the parser drop comments?" in got["text"]
     bridge("note", world["b"], "s3-cloud", host="cloud-box", text="cloud session is writing the docs")
     back = bridge("resume", world["a"], "s1-local")
@@ -105,7 +105,7 @@ def test_a_remote_session_joins_through_the_shared_branch_both_ways(world):
 
 
 def test_two_sessions_pushing_at_once_both_land(world):
-    p1 = bridge("note", world["a"], "s1-local", wait=False, text="note from the laptop")
+    p1 = bridge("note", world["a"], "s1-local", wait=False, text="note from this machine")
     p2 = bridge("note", world["b"], "s3-cloud", host="cloud-box", wait=False, text="note from the cloud")
     finish(p1)
     finish(p2)
@@ -113,7 +113,7 @@ def test_two_sessions_pushing_at_once_both_land(world):
     bridge("resume", world["b"], "s3-cloud", host="cloud-box")
     texts = [json.loads(git(world["remote"], "show", "byxin-brain:" + n)).get("text")
              for n in git(world["remote"], "ls-tree", "--name-only", "byxin-brain").split()]
-    assert "note from the laptop" in texts and "note from the cloud" in texts, texts
+    assert "note from this machine" in texts and "note from the cloud" in texts, texts
 
 
 def test_without_share_json_nothing_leaves_the_machine(world, tmp_path):
@@ -177,10 +177,10 @@ def classic(event, cwd, session, remote=True, **kw):
 
 
 def test_a_cloud_session_shares_the_brain_through_classic_hooks(world):
-    bridge("note", world["a"], "s1-local", text="desk note for the cloud")
+    bridge("note", world["a"], "s1-local", text="laptop note for the cloud")
     out = classic("SessionStart", world["b"], "s3-cloud")
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart" and "desk note for the cloud" in ctx
+    assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart" and "laptop note for the cloud" in ctx
     classic("UserPromptSubmit", world["b"], "s3-cloud", prompt="write the docs page")
     classic("PostToolUse", world["b"], "s3-cloud", tool_name="Write", tool_input={"file_path": str(world["b"] / "DOCS.md")})
     classic("Stop", world["b"], "s3-cloud")
@@ -209,7 +209,7 @@ def test_a_wrong_record_is_retracted_kept_and_marked_and_a_turn_says_what_it_edi
     bridge("turn", world["a"], "s1-local", ask="create notes.md", files=["notes.md"], answer="I could not write it")
     bridge("turn", world["a"], "s1-local", ask="explain the parser", answer="It reads tokens.")
     ev = [e for e in bridge("events", world["a"], "s1-local")["events"] if e["kind"] == "turn" and e.get("files")][0]
-    r = bridge("retract", world["a"], "s2-local", event=ev["id"][:24], why="the write was refused; notes.md was never created")
+    r = bridge("retract", world["a"], "s2-local", event=ev["id"], why="the write was refused; notes.md was never created")
     assert r["retracts"] == ev["id"]
     text = bridge("resume", world["wt"], "s3-local")["text"]
     assert "the write was refused; notes.md was never created" in text
@@ -238,12 +238,12 @@ def old_turn(root, session, ask, answer, at):
     eid = "%s-%s-turn-old%03d" % (at.replace("-", "").replace(":", ""), session[:8], len(os.listdir(os.path.join(hub, "events"))))
     with open(os.path.join(hub, "events", eid + ".json"), "w", encoding="utf-8") as fh:
         json.dump({"id": eid, "at": at, "kind": "turn", "origin": "perceived", "by": "claude-code", "session": session,
-                   "host": "desk", "branch": "main", "ask": ask, "answer": answer}, fh)
+                   "host": "laptop", "branch": "main", "ask": ask, "answer": answer}, fh)
 
 
 def test_a_notification_is_not_someone_asking(world):
-    """Measured 2026-10-04: a session watching a long-running job recorded every monitor event as "asked: <task-notification>",
-    and the block every other session read was a wall of status lines. A turn a notification started is no one asking:
+    """A long-running job's notifications are not questions, or they fill the block every other session reads. A turn a
+    notification started is no one asking:
     the mod records it only when it edited something, and says what started it; a record written before the fix (its
     ask the notification itself) is read the same way."""
     bridge("turn", world["a"], "mon-1", trigger="task-notification", files=["watch.sh"], answer="noted")
@@ -300,8 +300,8 @@ def test_the_mod_and_the_bridge_know_the_same_envelopes():
 
 
 def test_a_later_prompt_hears_only_what_is_new(world):
-    """
-    """
+    """With several live sessions, repeating the whole block on every prompt drowns it. A later prompt hears what
+    changed since its session last heard."""
     import time
     bridge("turn", world["a"], "s1-local", ask="first ask about the lexer", answer="ok")
     heard = bridge("start", world["wt"], "reader")
@@ -318,8 +318,7 @@ def test_a_later_prompt_hears_only_what_is_new(world):
 
 
 def test_only_files_in_the_project_are_named(world):
-    """Measured 2026-10-05: sessions were shown "editing" scratchpad and memory files outside the project. The shared
-    brain is about this project; a path outside it is never named, and a turn that edited only such files says so."""
+    """The shared brain is about this project; a path outside it is never named, and a turn that edited only such files says so."""
     outside = ["Z:/scratch/probe.py", "../elsewhere/notes.md", "/tmp/x.json"]
     bridge("turn", world["a"], "s1-local", ask="refactor the parser", files=["parse.py"] + outside, answer="done")
     bridge("turn", world["a"], "s1-local", ask="write a scratch probe", files=outside[:1], answer="written")
@@ -342,3 +341,10 @@ def test_the_block_has_a_cap(world):
     spec.loader.exec_module(b)
     assert len(text) <= b.BLOCK_CAP + 120, len(text)
     assert "/byxin brain" in text, text[-300:]
+
+
+def test_the_first_session_in_a_project_is_told_what_byxin_is_and_no_later_one(world):
+    assert bridge("start", world["a"], "first-one")["first"] is True
+    assert bridge("start", world["a"], "first-one")["first"] is True, "a session's own restart is still the first"
+    bridge("turn", world["a"], "first-one", ask="what is here?", answer="a parser")
+    assert bridge("start", world["wt"], "second-one")["first"] is False

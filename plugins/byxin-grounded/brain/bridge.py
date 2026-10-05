@@ -10,7 +10,22 @@ two halves the handler composes, unchanged, by importing its functions:
   check    {answer, question, state}  -> the comparator's verdict: citations, numbers, (claims), contested notes
   <op>     {...}                      -> thin wrappers over the other layers (state, lessons, history, mind)
 
+WHICH BRAIN. A project that IS a ByxIn tree (tools/byxin_rerank.py, tools/byxin_history.py and the answering skill
+beside each other) is served by its OWN brain: its code, its record,
+its lessons, its loop lock. One brain per project, never a second copy beside it: a vendored loop started next to a
+live one would share its engine and break the temperature-0 measurement. Any other project is served by the brain
+vendored with this mod, its record kept per project outside the mod's folder (a folder the host watches and
+reloads on every save). BYXIN_ROOT names a brain tree explicitly.
 
+THE SHARED BRAIN (cross-session continuity). Every Claude Code session in one project writes what it did as write-once
+event files -- start, each turn (what was asked, the files edited, the comparator's verdict), a note a person left,
+end -- into one hub: <the repository's shared .git>/byxin-brain/, the same directory from every worktree of the
+repository, or ~/.byxin/projects/<name>-<hash>/ outside git. Each session reads the others' events when it starts
+and as they arrive: what was asked, what was edited, what was left open, and who is editing what right now. A
+session on another machine (a cloud session) joins through the repository itself: when the project carries
+.byxin/share.json, the hub is unioned with an orphan branch on that remote by git plumbing alone -- a scratch
+index, hash-object, write-tree, commit-tree, push -- nothing staged in anyone's index. Events are
+write-once with unique names, so the union is every file from both sides: no merge, no conflict case.
 
 What a session did is PERCEIVED by the mod (it watched the turn happen); a note is TOLD (a person said it). Neither is
 a fact about the code, and the block a session receives says so.
@@ -39,9 +54,9 @@ SYNC_EVERY_S = 120
 BRAIN_IDENT = {"GIT_AUTHOR_NAME": "ByxIn shared brain", "GIT_AUTHOR_EMAIL": "byxin@localhost",
                "GIT_COMMITTER_NAME": "ByxIn shared brain", "GIT_COMMITTER_EMAIL": "byxin@localhost"}
 #: The envelopes Claude Code wraps around a prompt no person typed: a background task's notification, a reminder, a CI
-#: event, a local command's echo. A turn that opens with one is no one asking (lesson a-status-line-is-not-someone-
-#: asking): measured 2026-10-04, a session watching a long-running job recorded every monitor event as "asked: <task-
-#: notification>". hooks/register.tsx keeps the same list and reads the engine's own origin of the prompt first.
+#: event, a local command's echo, a subagent's report. A turn that opens with one is no one asking (lesson
+#: a-status-line-is-not-someone-asking). hooks/register.tsx keeps the same list and reads the engine's own origin of
+#: the prompt first.
 ENVELOPES = ("task-notification", "system-reminder", "ci-monitor-event", "local-command-caveat", "local-command-stdout",
              "command-name", "bash-input", "bash-stdout", "bash-stderr",
              "agent-message")
@@ -58,9 +73,9 @@ def envelope_of(text):
 # ── git, without a window and without touching anyone's index ────────────────────────────────────────────────
 
 def _git(args, cwd, env=None, check=True, timeout=60, input=None):
-    # BYTES on both pipes. A text-mode pipe on Windows writes every "\n" as "\r\n": measured 2026-10-03, the paths
-    # fed to hash-object --stdin-paths and update-index --index-info arrived with a carriage return each, nothing was
-    # added, and every shared-branch commit carried the empty tree while the sync reported success.
+    # BYTES on both pipes. A text-mode pipe on Windows writes every "\n" as "\r\n": the paths fed to hash-object
+    # --stdin-paths and update-index --index-info would arrive with a carriage return each, nothing would be added, and
+    # every shared-branch commit would carry the empty tree while the sync reported success.
     r = subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True,
                        input=input.encode("utf-8") if input is not None else None,
                        stdin=None if input is not None else subprocess.DEVNULL,
@@ -182,16 +197,16 @@ def _corpus(R, root):
 
 
 def _anchored(R, subject, common=lambda t: False, tokens=lambda s: [s]):
-    """
-    """
+    """Does the question name something that can be looked up by its letters -- an identifier, a path, a CamelCase
+    name, a quoted phrase? A bare number or year anchors nothing. Conversation ("how can we test it?") names none.
+    Nor does a name the whole record is full of (the project's own name): a question about the project in general
+    would otherwise be told to refuse instead of being left to the session."""
     return any(not t.replace("-", "").replace(".", "").isdigit() and not all(common(w) for w in tokens(t) or [t])
                for t in R.exact_tokens_in(subject))
 
 
-#: Words a question is made of, never what it is about. Measured 2026-10-05 on a 61-page project: "how does the
-#: AcmeOS tokenizer split input?" scored 0.40 coverage on the one page that answers it, because "how" and "does" were
-#: in no page and so weighed as the rarest terms of all. A large record hides this (they are common there); a small
-#: one does not.
+#: Words a question is made of, never what it is about. In a small record "how" and "does" may appear on no page and
+#: so weigh as the rarest terms of all, sinking the page that answers the question; a large record hides this.
 QUESTION_WORDS = frozenset(
     "a about all also an and any are as at be been but by can could did do does each every for from had has have he her "
     "his how i if in into is it its just me many more most much my no not now of on only or our out over please she should show so "
@@ -226,10 +241,10 @@ ENGINE_SERVES_TTL = 600
 
 
 def mark_ask():
-    """MEASUREMENTS YIELD TO A PERSON (the user, 2026-10-01). Before this layer asks a brain tree's live engine anything,
-    it leaves a mark in the tree -- when, which session, nothing of the question -- and the tree's bench reads it as a
-    person present (byxin_bench.person_present). Measured 2026-10-04: every question in a Claude Code session made three
-    engine calls the bench could not see. A vendored brain has no bench to tell."""
+    """MEASUREMENTS YIELD TO A PERSON. Before this layer asks a brain tree's live engine anything, it leaves a mark in
+    the tree -- when, which session, nothing of the question -- and the tree's bench reads it as a person present
+    (byxin_bench.person_present), so a measurement never runs through a person's questions. A vendored brain has no
+    bench to tell."""
     if CTX.get("vendored") or not CTX.get("tree"):
         return
     try:
@@ -244,8 +259,10 @@ def mark_ask():
 
 
 def engine_serves(url):
-    """
-    """
+    """Is the engine on this port THIS project's brain? Its record's writer says where it runs from. Without this a
+    session in one ByxIn project would take another project's engine, on the same port, for its own record. None when
+    no engine answers (the dense lane then fails on its own). A definite
+    answer is kept for ENGINE_SERVES_TTL, so the engine is not asked whose brain it is on every question."""
     base = os.path.dirname(HERE) if CTX.get("vendored") else CTX.get("tree") or ""
     cache = os.path.join(_dir("runtime"), "engine_serves.json")
     key = "%s|%s" % (url, os.path.normcase(os.path.abspath(base)))
@@ -295,6 +312,12 @@ def prepare(a, H):
     corpus = _corpus(R, root)
     q = (a.get("question") or "").strip()
     subject = H.subject_of(q)
+    # THE COVERAGE FLOOR, for every lane. BM25 has no similarity to floor, and without one an off-topic question
+    # ("airspeed of a swallow") returns the files that happen to say 'swallow'; the dense lane has a similarity floor,
+    # yet it passes passages about the project in general for a question about one part of it, which the session would
+    # then be told to answer only from. So a passage counts only if it covers the question:
+    # the IDF mass of the terms it carries over the IDF mass of all the question's terms. Below the floor the record
+    # does not hold the question -- the green must be able to go red.
     covers, floor, anchored, judged = _judge(R, B, subject, root)
     block, kept, top, retrieval_note = "", [], 0.0, None
     url = "http://127.0.0.1:%s/" % H._rpc_port()
@@ -532,8 +555,8 @@ BLOCK_CAP, NEWS_CAP = 5000, 2500
 
 
 def _in_project(f):
-    """A path the shared brain may name: relative, inside the project. Measured 2026-10-05: sessions were shown
-    "editing" scratchpads, memory files and other repositories -- none of them this project's business."""
+    """A path the shared brain may name: relative, inside the project. Scratchpads, memory files and other
+    repositories are none of this project's business."""
     f = str(f or "").replace("\\", "/")
     return bool(f) and not f.startswith("/") and not re.match(r"^[A-Za-z]:", f) and f != ".." and not f.startswith("../")
 
@@ -653,9 +676,9 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
             if not _asked(t):
                 lines.append("  - after a %s (no one asked): %s%s" % (_trigger(t), _edited(t), answer(t)))
                 continue
-            # what was ASKED is not what was DONE: measured 2026-10-03, a session read "asked: create SESSION_LOG.md"
-            # as the file created, while the write had been refused. So every turn says what it edited, or that it
-            # edited nothing, and how its answer began.
+            # what was ASKED is not what was DONE: "asked: create NOTES.md" reads like the file was created, even when
+            # the write was refused. So every turn says what it edited, or that it edited nothing, and how its answer
+            # began.
             lines.append("  - asked: %s%s; %s%s" % (
                 (t.get("ask") or "")[:200], " -> %s" % t["outcome"] if t.get("outcome") else "", _edited(t), answer(t)))
         if quiet:
@@ -664,9 +687,8 @@ def resume_text(since=None, limit_sessions=6, limit_notes=10):
         if files and not any(_project_files(t.get("files")) for t in shown[-3:]):
             lines.append("  - files edited: " + ", ".join(files[:10]))
     if older:
-        # Measured 2026-10-03, the cloud session's run: the edit of a session older than the six shown fell out of the
-        # block, and the model could only call it another session's claim. An edit never falls out: the older sessions
-        # are summed up in one line with every file they changed.
+        # An edit never falls out of the block: the sessions older than those shown in full are summed up in one line
+        # with every file they changed.
         of = sorted({f for _sid, es in older for e in es if e.get("kind") == "turn" and e.get("id") not in retracted
                      for f in _project_files(e.get("files"))})
         lines.append("")
@@ -796,10 +818,12 @@ def where(a, H):
 
 
 def start(a, H):
+    first = not any(e.get("kind") != "start" or e.get("session") != CTX.get("session") for e in events())
     write_event("start", cwd=CTX["root"])
     beat_file([])
     s = sync() if share_config() else {"shared": False}
-    return {"ok": True, "text": resume_text(), "sync": s, "live": live_sessions(), "at": _now()}
+    # first: no session has left anything in this project's hub yet, so the mod says once what it is
+    return {"ok": True, "text": resume_text(), "sync": s, "live": live_sessions(), "at": _now(), "first": first}
 
 
 def beat(a, H):
