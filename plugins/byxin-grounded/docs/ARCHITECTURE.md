@@ -36,9 +36,6 @@ Tested by `test_shared_brain.py`: two worktrees, a separate clone as the remote 
 concurrent pushes, the classic-hook path, and the red halves (a session alone hears nothing, no `share.json` sends
 nothing, a `never` remote is refused, classic hooks stay silent in a local session).
 
-## The C++ engine
-Not part of this release. Without it retrieval is lexical (identifier recall and BM25 with a coverage floor) and every other layer works; `/byxin engine up` says so.
-
 ## Retrieval judgment (tested by `test_retrieval_battery.py`)
 Without a dense lane the lexical lanes have no similarity floor, so `bridge.py` supplies one: a hit must carry the question's
 rare terms (a term in more than 2% of chunks is not vocabulary of the record; its file name counts as text), cover 0.6 of their IDF mass (0.5 when the

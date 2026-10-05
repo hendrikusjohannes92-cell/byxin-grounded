@@ -431,23 +431,10 @@ def remember(a, H):
     return {"ok": True, "stored": stored}
 
 
-def state(a, H):
-    import byxin_affect
-    return {"ok": True, "text": byxin_affect.render(byxin_affect.state())}
-
-
 def lessons(a, H):
     import byxin_lessons as L
     rows = L.load() if hasattr(L, "load") else []
     return {"ok": True, "lessons": [{"slug": r.get("slug"), "title": r.get("title"), "lesson": r.get("lesson")} for r in rows]}
-
-
-def mind(a, H):
-    import byxin_mind as M
-    s = M.score(db=CTX.get("db"))
-    held, n = s.get("held", 0), s.get("predictions", 0)
-    return {"ok": True, "text": "the mind's predictions about itself: %d held of %d%s" % (
-        held, n, "" if n else " (none recorded yet: the trainer records one per trial on the mind's focus)"), "score": s}
 
 
 # ── the shared brain ─────────────────────────────────────────────────────────────────────────────────────────

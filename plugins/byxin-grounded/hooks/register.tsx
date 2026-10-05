@@ -9,7 +9,6 @@ import { LESSONS, SECTION } from './lessons'
 //   comparator  handler + byxin_nli         citations, numbers, claims checked against what was shown
 //   history     byxin_history               every answered question is an episode with declared provenance (answering_layer)
 //   shared brain bridge.py hub             every session in one project reads what the others did, and who is editing what
-//   the loop    bench trainer mind examiner consistency maintenance selftest ideas consolidation ltm sandbox export
 // Claude Code's own model is the content model: the bridge splits the answering layer around it.
 //
 // WHICH BRAIN. A project that is itself a ByxIn tree is served by its own brain (its record, its lessons, its loop
@@ -68,7 +67,6 @@ let project = ''
 let sid = ''
 let PY: string[] | null = null
 let where: Where | null = null
-let queue = ''
 let mode: 'questions' | 'always' | 'off' = 'questions'
 let pending: { question: string; state: unknown; lessons: string[]; chunks: number } | null = null
 let reads: string[] = []
@@ -96,11 +94,7 @@ let sendToolError = ''
 let lastBeat = 0
 const alerts: string[] = []
 const warned = new Set<string>()
-// The engine and its completion queue are not in this build; these values stay unused here.
 let ready: Promise<void> | null = null
-let engineModel = 'haiku'
-let served = 0
-let lastFailure = ''
 
 // A path inside the project, relative to the session's tree or the project's main tree; null for anything outside
 // (a scratchpad, a memory file, another repository): those are none of this project's business, and naming them would
@@ -170,7 +164,7 @@ async function heartbeat($: Api): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
-    await $.command.register({ name: 'byxin', description: 'ByxIn: ask | on | off | always | ledger | brain | note | notes | events | retract | sessions | share | where | engine | ' + Object.keys(TOOLS).join(' | ') })
+    await $.command.register({ name: 'byxin', description: 'ByxIn: ask | on | off | always | ledger | brain | note | notes | events | retract | sessions | share | where | send | mail | name | ' + Object.keys(TOOLS).join(' | ') })
     $.ui.status('ByxIn: starting')
     // the model's send tool is registered before the first turn: a tool registered later is listed only from the next
     try {
@@ -198,7 +192,6 @@ export const register: Register = on => {
         return
       }
       where = w as unknown as Where
-      queue = `${where.runtime}/queue`
       const st = await run($, 'start', {}, 120000)
       if (st.ok) {
         resumeText = String(st.text ?? '')
@@ -406,9 +399,6 @@ export const register: Register = on => {
       const r = await run($, 'events', { n: Number(rest[0] ?? 30) || 30 })
       const list = (r.events as { id: string; kind: string; files?: string[]; outcome?: string }[] | undefined) ?? []
       return { text: r.ok ? list.map(v => `${v.id}  ${v.kind}${v.outcome ? ' ' + v.outcome : ''}${v.files?.length ? ' edited ' + v.files.join(', ') : ''}`).join('\n') || 'The shared brain is empty.' : 'ByxIn: ' + r.error }
-    }
-    if (sub === 'engine') {
-      return { text: 'this build ships without the C++ engine: retrieval stays lexical, and everything else works without it.' }
     }
     if (sub === 'ledger') {
       return { text: `ByxIn this session: ${asked} questions through the layers, ${unverified} flagged by the comparator, ${sessionEdits.size} files edited.\nLessons in force (system prompt): ${LESSONS.map(l => l.slug).join(', ')}` }
