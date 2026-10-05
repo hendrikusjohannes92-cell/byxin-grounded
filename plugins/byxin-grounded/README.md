@@ -1,6 +1,6 @@
 # byxin-grounded
 
-ByxIn's brain inside Claude Code. Version 0.8.0.
+ByxIn's brain inside Claude Code. Version 0.9.0.
 
 Claude Code answers from what it can see. byxin-grounded puts a small, honest brain beside it, for anyone, in any
 repository:
@@ -47,7 +47,7 @@ session in a new project says in one line what ByxIn does and how to turn it off
 | `/byxin brain` | what the other sessions of this project did and left |
 | `/byxin sessions` | who is working here right now, and on what |
 | `/byxin note <text>` · `notes` | leave a note every session here will read · list them |
-| `/byxin send <session or all> <text>` | mail another session; an idle one is woken with it |
+| `/byxin send <session or all> <text>` | mail another session (its id, 8 or more of its characters, or its name); an idle one is woken with it |
 | `/byxin mail` · `/byxin name <name>` | the mail for this session · give it a name others can mail it by |
 | `/byxin events` · `/byxin retract <id> <why>` | the record of sessions; mark one wrong, kept and marked |
 | `/byxin share on` | share the brain through the repository, so sessions on other machines and the web join |
@@ -56,6 +56,12 @@ session in a new project says in one line what ByxIn does and how to turn it off
 The model gets one tool, `send`, to mail another session itself (to hand over work or warn about a file you are both
 changing). Claude Code's own session messaging reaches live sessions on one machine; ByxIn mail also reaches sessions
 on other machines and on the web, and stays in the project's record.
+
+Mail cannot keep sessions busy with no person in the loop: a mail wakes its recipient, the answer wakes the sender, and
+a reply to that answer is shown but starts no turn. Mail to `all` is shown to every session and wakes none, and no
+sender starts more than three turns an hour in one session. Mail already waiting when a session starts is in the
+shared-brain block it reads first, not a wake-up. Who wrote a mail (a person or a session's model) is the sender's
+claim, and the woken turn says so.
 
 ## Sharing across machines and web sessions
 
@@ -101,9 +107,8 @@ The details, so you can decide before installing it:
 
 **What it adds to your prompts.** The reading-rules section, and, for a question about the project, the passages it
 retrieved and the shared brain's news. Mail from another session arrives as a new turn of your session (marked as the
-plugin's message, never as your words); `/byxin off` keeps mail from starting turns. The plugin does not call a model
-itself, except `/byxin audit`, which you start and which runs the Claude Code CLI on your machine to judge
-contradictions in the record.
+plugin's message from another session, never as your words or your instructions); `/byxin off` keeps mail from
+starting turns. The plugin does not call a model itself.
 
 **What it runs on your machine.**
 - Python 3 (`brain/bridge.py`) when you ask a question about the project, after each turn, and once a minute while

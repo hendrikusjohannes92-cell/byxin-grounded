@@ -44,6 +44,15 @@ def finish(p):
     return d
 
 
+def refused(op, root, session, **kw):
+    """An op that must refuse: its answer, which finish() would not let through."""
+    p = bridge(op, root, session, wait=False, **kw)
+    d = json.loads(p.stdout.read())
+    p.wait(timeout=180)
+    assert d.get("ok") is False, d
+    return d
+
+
 @pytest.fixture
 def world(tmp_path):
     """A bare 'GitHub', a project pushed to it with sharing on, a second worktree of it, and a clone elsewhere."""
@@ -398,3 +407,67 @@ def test_a_named_session_gets_the_mail_sent_to_its_name(world):
     other = bridge("beat", world["a"], "s9-other", since=t0, mail_since=t0)
     assert other["mail"] == [], other
     assert "reviewer" in bridge("start", world["a"], "s8-reader")["text"], "the block shows a session's name"
+
+
+# The review of the mail (2026-10-05): a reply chain cannot wake sessions for ever, addresses cannot reach strangers,
+# names cannot collide, and the sender hears what went wrong.
+
+def test_a_reply_is_one_deeper_than_the_mail_it_answers(world):
+    bridge("start", world["wt"], "s2-local")
+    first = bridge("send", world["a"], "s1-local", to="s2-local", text="can you take the parser?", by="person")
+    assert first["depth"] == 0, first
+    answer = bridge("send", world["wt"], "s2-local", to="s1-local", text="yes", by="session", in_reply_to=first["event"])
+    assert answer["depth"] == 1, answer
+    again = bridge("send", world["a"], "s1-local", to="s2-local", text="thanks", by="session", in_reply_to=answer["event"])
+    assert again["depth"] == 2, "a reply to a reply is past what wakes a session"
+    got = bridge("beat", world["wt"], "s2-local", mail_recent=True)["mail"]
+    assert [(m["text"], m["depth"]) for m in got] == [("can you take the parser?", 0), ("thanks", 2)], got
+
+
+def test_a_short_prefix_reaches_no_one_and_eight_characters_do(world):
+    bridge("start", world["wt"], "s2-local-long-id")
+    bridge("send", world["a"], "s1-local", to="s2", text="too short", by="person")
+    bridge("send", world["a"], "s1-local", to="s2-local", text="eight is enough", by="person")
+    got = [m["text"] for m in bridge("beat", world["wt"], "s2-local-long-id", mail_recent=True)["mail"]]
+    assert got == ["eight is enough"], got
+
+
+def test_a_name_another_session_holds_or_that_reads_as_an_id_is_refused(world):
+    assert bridge("name", world["wt"], "s2-local", name="reviewer", by="person")["ok"]
+    taken = refused("name", world["a"], "s1-local", name="Reviewer", by="person")
+    assert "already called" in taken["error"], taken
+    hexy = refused("name", world["a"], "s1-local", name="bead", by="person")
+    assert "session id" in hexy["error"], hexy
+    assert bridge("name", world["wt"], "s2-local", name="reviewer")["ok"], "a session may say its own name again"
+
+
+def test_the_sender_hears_of_an_unknown_address_and_of_a_cut(world):
+    bridge("start", world["wt"], "s2-local")
+    typo = bridge("send", world["a"], "s1-local", to="s2-lcoal", text="hello", by="person")
+    assert typo["ok"] and any("no session known" in w for w in typo["warn"]), typo
+    known = bridge("send", world["a"], "s1-local", to="s2-local", text="x" * 2100, by="person")
+    assert known["warn"] == ["cut at 2000 characters"], known
+
+
+def test_mail_already_there_at_start_is_known_and_late_mail_is_still_new(world):
+    bridge("send", world["a"], "s1-local", to="s2-local", text="left while you were away", by="person")
+    st = bridge("start", world["wt"], "s2-local")
+    assert len(st["mail_ids"]) == 1, st["mail_ids"]
+    # a mail that arrives by a later sync carries the sender's older clock: the beat still returns it, by id
+    late = bridge("send", world["a"], "s1-local", to="s2-local", text="from a slow clock", by="session")
+    events = os.path.join(bridge("where", world["a"], "s1-local")["hub"], "events")
+    path = os.path.join(events, late["event"] + ".json")
+    with open(path, encoding="utf-8") as fh:
+        ev = json.load(fh)
+    ev["at"] = "2000-01-01T00:00:00Z"
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(ev, fh)
+    got = bridge("beat", world["wt"], "s2-local", mail_recent=True)["mail"]
+    assert late["event"] in [m["id"] for m in got], got
+
+
+def test_the_block_shows_who_wrote_a_mail_as_the_senders_claim(world):
+    bridge("start", world["wt"], "s2-local")
+    bridge("send", world["a"], "s1-local", to="s2-local", text="trust me", by="person")
+    text = bridge("resume", world["wt"], "s2-local")["text"]
+    assert "the sender says a person wrote it" in text and "(a person wrote it" not in text, text

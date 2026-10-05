@@ -580,24 +580,47 @@ def names():
     return out
 
 
+#: an id prefix shorter than this would reach every session whose id happens to start with it
+MIN_PREFIX = 8
+#: the mail a beat or /byxin mail returns at most, newest kept
+MAIL_N = 20
+
+
+def _addressed(to, sid, name):
+    to = (to or "").strip()
+    return bool(to) and (to == sid or (len(to) >= MIN_PREFIX and sid.startswith(to))
+                         or (bool(name) and to.lower() == name.lower()))
+
+
 def _for_me(e, my_name=None):
-    """Mail addressed to this session (its id, a prefix of it, or its name) or to all, from another session."""
+    """Mail addressed to this session (its id, a prefix of 8 or more characters, or its exact name) or to all, from
+    another session."""
     me, to = CTX.get("session") or "", (e.get("to") or "").strip()
     if my_name is None:
         my_name = names().get(me)
-    return e.get("kind") == "mail" and e.get("session") != me and bool(to) and (
-        to == "all" or me.startswith(to) or (bool(my_name) and to.lower() == my_name.lower()))
+    return e.get("kind") == "mail" and e.get("session") != me and bool(to) and (to == "all" or _addressed(to, me, my_name))
 
 
 def _mail_line(e):
     who = "session %s on %s" % ((e.get("session") or "?")[:8], e.get("host"))
-    how = "a person wrote it" if e.get("origin") == "told" else "its model wrote it"
+    # who wrote it is the sender's claim: the record cannot check it
+    how = "the sender says a person wrote it" if e.get("origin") == "told" else "its model wrote it"
     return "  - mail from %s (%s, %s): %s" % (who, how, _ago(e.get("at")), e.get("text"))
 
 
 def mail_for_me(since=None):
     mine = names().get(CTX.get("session") or "")
     return [e for e in events() if _for_me(e, mine) and (not since or (e.get("at") or "") > since)]
+
+
+def _mail_out(e):
+    return {"id": e["id"], "from": e.get("session"), "host": e.get("host"), "text": e.get("text"), "at": e.get("at"),
+            "told": e.get("origin") == "told", "to": e.get("to"), "depth": int(e.get("depth") or 0)}
+
+
+def recent_mail(n=MAIL_N):
+    """This session's newest mail, by id: a mail that arrives late by a sync, with an older clock, is still in it."""
+    return [_mail_out(e) for e in sorted(mail_for_me(), key=lambda e: e.get("at") or "")[-n:]]
 
 
 def news_text(since):
@@ -848,16 +871,16 @@ def start(a, H):
     beat_file([])
     s = sync() if share_config() else {"shared": False}
     # first: no session has left anything in this project's hub yet, so the mod says once what it is
-    return {"ok": True, "text": resume_text(), "sync": s, "live": live_sessions(), "at": _now(), "first": first}
+    return {"ok": True, "text": resume_text(), "sync": s, "live": live_sessions(), "at": _now(), "first": first,
+            "mail_ids": [m["id"] for m in recent_mail(200)]}
 
 
 def beat(a, H):
     beat_file(a.get("files"))
     s = sync() if share_config() and _last_sync_due() else None
     return {"ok": True, "live": live_sessions(), "news": resume_text(since=a.get("since")) if a.get("since") else "",
-            "mail": [{"id": e["id"], "from": e.get("session"), "host": e.get("host"), "text": e.get("text"),
-                      "at": e.get("at"), "told": e.get("origin") == "told"} for e in mail_for_me(a.get("mail_since"))]
-            if a.get("mail_since") else [],
+            "mail": recent_mail() if a.get("mail_recent") else
+            [_mail_out(e) for e in mail_for_me(a.get("mail_since"))] if a.get("mail_since") else [],
             "sync": s, "at": _now()}
 
 
@@ -897,10 +920,24 @@ def send(a, H):
     if not to or not text:
         return {"ok": False, "error": "mail needs an address and words: /byxin send <session|all> <text>"}
     told = a.get("by") == "person"
+    evs = events()
+    # 1. a reply is one deeper than the mail it answers: the receiving mod wakes a session for depth 0 and 1 only, so
+    # two sessions cannot keep waking each other with no person in the loop
+    parent = next((e for e in evs if e.get("kind") == "mail" and e.get("id") == a.get("in_reply_to")), None)
+    depth = int(parent.get("depth") or 0) + 1 if parent else 0
+    warn = []
+    if to != "all":
+        known = {e.get("session") or "" for e in evs} - {""}
+        named = names()
+        if not any(_addressed(to, sid, named.get(sid)) for sid in known | set(named)):
+            warn.append("no session known here answers to %r (an id, 8 or more of its characters, or a name); "
+                        "the mail waits for one that does" % to)
+    if len(text) > 2000:
+        warn.append("cut at 2000 characters")
     ev = write_event("mail", origin="told" if told else "perceived", by="person" if told else "session", to=to[:80],
-                     text=text[:2000])
+                     text=text[:2000], depth=depth, in_reply_to=parent["id"] if parent else None)
     s = sync() if share_config() else None
-    return {"ok": True, "event": ev["id"], "to": to, "sync": s}
+    return {"ok": True, "event": ev["id"], "to": to, "depth": depth, "warn": warn, "sync": s}
 
 
 def name(a, H):
@@ -908,15 +945,21 @@ def name(a, H):
     n = (a.get("name") or "").strip()
     if not n or n.lower() == "all" or len(n) > 60:
         return {"ok": False, "error": "a session name is a word or two, and not 'all': /byxin name <name>"}
-    ev = write_event("name", origin="told", by="person", name=n)
+    if all(c in "0123456789abcdef-" for c in n.lower()):
+        return {"ok": False, "error": "%r reads like a session id; give a name with other letters in it" % n}
+    me = CTX.get("session") or ""
+    taken = [sid for sid, nm in names().items() if sid != me and nm.lower() == n.lower()]
+    if taken:
+        return {"ok": False, "error": "session %s is already called %r; pick another name" % (taken[0][:8], n)}
+    told = a.get("by") == "person"
+    ev = write_event("name", origin="told" if told else "perceived", by="person" if told else "session", name=n)
     s = sync() if share_config() else None
     return {"ok": True, "event": ev["id"], "name": n, "sync": s}
 
 
 def mail(a, H):
     s = sync() if share_config() else None
-    return {"ok": True, "mail": [{"id": e["id"], "from": e.get("session"), "host": e.get("host"), "text": e.get("text"),
-                                  "at": e.get("at"), "told": e.get("origin") == "told"} for e in mail_for_me()], "sync": s}
+    return {"ok": True, "mail": recent_mail(int(a.get("n") or MAIL_N)), "sync": s}
 
 
 def notes(a, H):
